@@ -5,13 +5,35 @@ import urllib.parse as ul
 import albumentations
 import ftfy
 from bs4 import BeautifulSoup
+from typing import List, Tuple, Union
+import cv2
+from albumentations import CenterCrop, HorizontalFlip, SmallestMaxSize
+import random
 
 __all__ = ["create_video_transforms", "t5_text_preprocessing"]
 
 # video (pixel) transform
 
 
-def create_video_transforms(h, w, num_frames, interpolation="bicubic", backend="al", disable_flip=True):
+class VariableResizeAndCrop:
+    def __init__(self, sizes: Union[List[Tuple[int, int]], Tuple[int, int]], interpolation, targets):
+        if isinstance(sizes, tuple):
+            sizes = [sizes]
+        self._transforms = [albumentations.Compose(
+                [
+                    SmallestMaxSize(max_size=size[0], interpolation=interpolation),
+                    CenterCrop(size[0], size[1]),
+                ],
+                additional_targets=targets,
+            ) for size in sizes
+        ]
+
+    def __call__(self, **inputs):
+        transform = random.choice(self._transforms)
+        return transform(**inputs)
+
+
+def create_video_transforms(sample_size, num_frames, interpolation="bicubic", backend="al", disable_flip=True):
     """
     pipeline: flip -> resize -> crop
     h, w : target resize height, weight
@@ -26,13 +48,7 @@ def create_video_transforms(h, w, num_frames, interpolation="bicubic", backend="
         mapping = {"bilinear": cv2.INTER_LINEAR, "bicubic": cv2.INTER_CUBIC}
         if disable_flip:
             # flip is not proper for horizontal motion learning
-            pixel_transforms = albumentations.Compose(
-                [
-                    SmallestMaxSize(max_size=h, interpolation=mapping[interpolation]),
-                    CenterCrop(h, w),
-                ],
-                additional_targets=targets,
-            )
+            pixel_transforms = VariableResizeAndCrop(sample_size, mapping[interpolation], targets)
         else:
             # originally used in torch ad code, but not good for non-square video data
             # also conflict the learning of left-right camera movement

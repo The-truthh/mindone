@@ -99,11 +99,11 @@ class TextVideoDataset:
             self.filter_nonexistent_file()
         self.length = len(self.dataset)
         logger.info(f"Num data samples: {self.length}")
-        sample_size = tuple(sample_size) if not isinstance(sample_size, int) else (sample_size, sample_size)
+        # sample_size = tuple(sample_size) if not isinstance(sample_size, int) else (sample_size, sample_size)
+        sample_size = [(256, 256), (128, 128)]
         # it should match the transformation used in SD/VAE pretraining, especially for normalization
         self.pixel_transforms = create_video_transforms(
-            sample_size[0],
-            sample_size[1],
+            sample_size,
             self.sample_n_frames + self.use_image_num,  # visual transform for both video and images
             interpolation="bicubic",
             backend=transform_backend,
