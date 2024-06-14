@@ -4,6 +4,7 @@ import numpy as np
 
 import mindspore as ms
 from mindspore import nn, ops
+from mindspore import mint
 
 from ..modules.attention import make_attn
 from ..modules.conv import CausalConv3d
@@ -55,7 +56,6 @@ class CausalVAEModel(nn.Cell):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
 
-        self.split = ops.Split(axis=1, output_num=2)
         self.exp = ops.Exp()
         self.stdnormal = ops.StandardNormal()
 
@@ -144,7 +144,8 @@ class CausalVAEModel(nn.Cell):
         # return latent distribution, N(mean, logvar)
         h = self.encoder(x)
         moments = self.quant_conv(h)
-        mean, logvar = self.split(moments)
+        split_size = int(moments.shape[1] / 2)
+        mean, logvar = mint.split(moments, split_size_or_sections=split_size, axis=1)
 
         return mean, logvar
 
@@ -201,7 +202,8 @@ class CausalVAEModel(nn.Cell):
             result_rows.append(ops.cat(result_row, axis=4))
 
         moments = ops.cat(result_rows, axis=3)
-        mean, logvar = self.split(moments)
+        split_size = int(moments.shape[1] / 2)
+        mean, logvar = mint.split(moments, split_size_or_sections=split_size, axis=1)
         return mean, logvar
 
     def decode(self, z):

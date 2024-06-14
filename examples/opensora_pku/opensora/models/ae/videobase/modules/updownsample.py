@@ -1,7 +1,7 @@
 from typing import Tuple, Union
 
 import mindspore as ms
-from mindspore import nn, ops
+from mindspore import nn, ops, mint
 
 from .conv import CausalConv3d
 from .ops import cast_tuple
@@ -37,14 +37,14 @@ class Downsample(nn.Cell):
             self.conv = nn.Conv2d(
                 in_channels, in_channels, kernel_size=3, stride=2, pad_mode="valid", padding=0, has_bias=True
             ).to_float(self.dtype)
+            self.pad = (0, 1, 0, 1)
 
     def construct(self, x):
         if self.with_conv:
-            pad = ((0, 0), (0, 0), (0, 1), (0, 1))
-            x = nn.Pad(paddings=pad)(x)
+            x = ops.pad_ext(x, self.pad, mode="constant", value=0)
             x = self.conv(x)
         else:
-            x = ops.AvgPool(kernel_size=2, stride=2)(x)
+            x = mint.nn.functional.avg_pool2d(x, kernel_size=2, stride=2)
         return x
 
 
@@ -74,13 +74,11 @@ class SpatialDownsample2x(nn.Cell):
 
         # no asymmetric padding, must do it ourselves
         # order (width_pad, width_pad, height_pad, height_pad, time_pad, 0)
-        # self.padding = (0,1,0,1,0,0) # not compatible for ms2.2
-        self.pad = ops.Pad(paddings=((0, 0), (0, 0), (0, 0), (0, 1), (0, 1)))
+        self.padding = (0, 1, 0, 1, 0, 0)  # not compatible for ms2.2
 
     def construct(self, x):
         # x shape: (b c t h w)
-        # x = ops.pad(x, self.padding, mode="constant", value=0)
-        x = self.pad(x)
+        x = ops.pad_ext(x, self.padding, mode="constant", value=0)
         x = self.conv(x)
         return x
 
@@ -152,7 +150,7 @@ class TimeDownsample2x(nn.Cell):
             # FIXME: only work when h, w stride is 1
             b, c, t, h, w = x.shape
             x = ops.reshape(x, (b, c, t, h * w))
-            x = self.conv(x)
+            x = mint.nn.functional.avg_pool2d(x, kernel_size=(self.kernel_size, 1), stride=(2, 1))
             x = ops.reshape(x, (b, c, -1, h, w))
             return x
 
