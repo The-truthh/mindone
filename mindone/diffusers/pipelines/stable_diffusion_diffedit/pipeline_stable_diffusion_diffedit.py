@@ -608,7 +608,7 @@ class StableDiffusionDiffEditPipeline(DiffusionPipeline, TextualInversionLoaderM
         image = self.vae.decode(latents, return_dict=False)[0]
         image = (image / 2 + 0.5).clamp(0, 1)
         # we always cast to float32 as this does not cause significant overhead and is compatible with bfloat16
-        image = image.permute(0, 2, 3, 1).float().numpy()
+        image = image.permute(0, 2, 3, 1).float().asnumpy()
         return image
 
     def check_inputs(
@@ -1200,7 +1200,7 @@ class StableDiffusionDiffEditPipeline(DiffusionPipeline, TextualInversionLoaderM
         # 8. Post-processing
         image = None
         if decode_latents:
-            image = self.decode_latents(latents.flatten(0, 1))
+            image = self.decode_latents(latents.flatten(start_dim=0, end_dim=1))
 
         # 9. Convert to PIL.
         if decode_latents and output_type == "pil":

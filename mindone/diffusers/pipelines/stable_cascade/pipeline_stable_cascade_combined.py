@@ -258,11 +258,7 @@ class StableCascadeCombinedPipeline(DiffusionPipeline):
             callback_on_step_end=prior_callback_on_step_end,
             callback_on_step_end_tensor_inputs=prior_callback_on_step_end_tensor_inputs,
         )
-        image_embeddings = prior_outputs[0]
-        prompt_embeds = prior_outputs.get("prompt_embeds", None)
-        prompt_embeds_pooled = prior_outputs.get("prompt_embeds_pooled", None)
-        negative_prompt_embeds = prior_outputs.get("negative_prompt_embeds", None)
-        negative_prompt_embeds_pooled = prior_outputs.get("negative_prompt_embeds_pooled", None)
+        image_embeddings, prompt_embeds, prompt_embeds_pooled, negative_prompt_embeds, negative_prompt_embeds_pooled = prior_outputs
 
         outputs = self.decoder_pipe(
             image_embeddings=image_embeddings,
