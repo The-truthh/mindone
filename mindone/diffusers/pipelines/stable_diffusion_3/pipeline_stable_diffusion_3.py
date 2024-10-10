@@ -25,6 +25,7 @@ from ....transformers import CLIPTextModelWithProjection, T5EncoderModel
 from ...image_processor import VaeImageProcessor
 from ...loaders import SD3LoraLoaderMixin
 from ...models.autoencoders import AutoencoderKL
+from ...models.layers_compat import pad
 from ...models.transformers import SD3Transformer2DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
 from ...utils import logging, scale_lora_layers, unscale_lora_layers
@@ -371,7 +372,7 @@ class StableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                 max_sequence_length=max_sequence_length,
             )
 
-            clip_prompt_embeds = ops.pad(
+            clip_prompt_embeds = pad(
                 clip_prompt_embeds, (0, t5_prompt_embed.shape[-1] - clip_prompt_embeds.shape[-1])
             )
 
@@ -424,7 +425,7 @@ class StableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                 max_sequence_length=max_sequence_length,
             )
 
-            negative_clip_prompt_embeds = ops.pad(
+            negative_clip_prompt_embeds = pad(
                 negative_clip_prompt_embeds,
                 (0, t5_negative_prompt_embed.shape[-1] - negative_clip_prompt_embeds.shape[-1]),
             )

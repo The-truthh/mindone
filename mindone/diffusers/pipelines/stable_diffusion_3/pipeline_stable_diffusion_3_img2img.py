@@ -25,6 +25,7 @@ from mindspore import ops
 from ....transformers import CLIPTextModelWithProjection, T5EncoderModel
 from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...models.autoencoders import AutoencoderKL
+from ...models.layers_compat import pad
 from ...models.transformers import SD3Transformer2DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
 from ...utils import logging
@@ -391,7 +392,7 @@ class StableDiffusion3Img2ImgPipeline(DiffusionPipeline):
                 num_images_per_prompt=num_images_per_prompt,
             )
 
-            clip_prompt_embeds = ops.pad(
+            clip_prompt_embeds = pad(
                 clip_prompt_embeds, (0, t5_prompt_embed.shape[-1] - clip_prompt_embeds.shape[-1])
             )
 
@@ -443,7 +444,7 @@ class StableDiffusion3Img2ImgPipeline(DiffusionPipeline):
                 num_images_per_prompt=num_images_per_prompt,
             )
 
-            negative_clip_prompt_embeds = ops.pad(
+            negative_clip_prompt_embeds = pad(
                 negative_clip_prompt_embeds,
                 (0, t5_negative_prompt_embed.shape[-1] - negative_clip_prompt_embeds.shape[-1]),
             )
