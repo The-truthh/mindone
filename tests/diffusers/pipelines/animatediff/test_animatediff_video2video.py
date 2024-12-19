@@ -8,9 +8,12 @@ from transformers import CLIPTextConfig
 
 import mindspore as ms
 
+from mindone.diffusers.utils.testing_utils import load_downloaded_image_from_hf_hub, load_downloaded_numpy_from_hf_hub, load_downloaded_video_from_hf_hub, export_to_gif
+
 from ..pipeline_test_utils import (
     THRESHOLD_FP16,
     THRESHOLD_FP32,
+    THRESHOLD_PIXEL,
     PipelineTesterMixin,
     get_module,
     get_pipeline_components,
@@ -169,3 +172,46 @@ class AnimateDiffVideoToVideoPipelineFastTests(PipelineTesterMixin, unittest.Tes
 
         threshold = THRESHOLD_FP32 if dtype == "float32" else THRESHOLD_FP16
         assert np.max(np.linalg.norm(pt_image_slice - ms_image_slice) / np.linalg.norm(pt_image_slice)) < threshold
+
+
+@ddt
+class AnimateDiffVideoToVideoPipelineIntegrationTests(PipelineTesterMixin, unittest.TestCase):
+    @data(*test_cases)
+    @unpack
+    def test_inference(self, mode, dtype):
+        ms.set_context(mode=mode)
+        ms_dtype = getattr(ms, dtype)
+
+        adapter_cls = get_module("mindone.diffusers.models.unets.unet_motion_model.MotionAdapter")
+        adapter = adapter_cls.from_pretrained("guoyww/animatediff-motion-adapter-v1-5-2", mindspore_dtype=ms_dtype)
+        pipe_cls = get_module("mindone.diffusers.pipelines.animatediff.AnimateDiffVideoToVideoPipeline")
+        pipe = pipe_cls.from_pretrained(
+            "SG161222/Realistic_Vision_V5.1_noVAE", motion_adapter=adapter, mindspore_dtype=ms_dtype
+        )
+        scheduler_cls = get_module("mindone.diffusers.schedulers.scheduling_ddim.DDIMScheduler")
+        pipe.scheduler = scheduler_cls(
+            beta_schedule="linear", steps_offset=1, clip_sample=False, timestep_spacing="linspace"
+        )
+
+        video = load_downloaded_video_from_hf_hub(
+            "huggingface/documentation-images",
+            "animatediff-vid2vid-input-1.gif",
+            subfolder="diffusers",
+        )
+
+        torch.manual_seed(0)
+        output = pipe(
+            video=video,
+            prompt="panda playing a guitar, on a boat, in the ocean, high quality",
+            strength=0.5,
+            output_type="np",
+        )
+        frames = output[0][0]
+        
+        expected_image = load_downloaded_numpy_from_hf_hub(
+            "The-truth/mindone-testing-arrays",
+            f"v2v_{dtype}.npy",
+            subfolder="animatediff",
+        )
+        threshold = THRESHOLD_FP32 if dtype == "float32" else THRESHOLD_FP16
+        assert np.linalg.norm(expected_image - frames) / np.linalg.norm(expected_image) < threshold

@@ -155,3 +155,19 @@ class StableCascadePriorPipelineFastTests(PipelineTesterMixin, unittest.TestCase
 
         threshold = THRESHOLD_FP32 if dtype == "float32" else THRESHOLD_FP16
         assert np.max(np.linalg.norm(pt_image_slice - ms_image_slice) / np.linalg.norm(pt_image_slice)) < threshold
+
+
+@ddt
+class StableCascadePriorPipelineIntegrationTests(PipelineTesterMixin, unittest.TestCase):
+    @data(*test_cases)
+    @unpack
+    def test_stable_cascade_prior(self, mode, dtype):
+        ms.set_context(mode=mode)
+        ms_dtype = getattr(ms, dtype)
+
+        pipe_cls = get_module("mindone.diffusers.pipelines.stable_cascade.StableCascadePriorPipeline")
+        prior_pipe = pipe_cls.from_pretrained("stabilityai/stable-cascade-prior", mindspore_dtype=ms_dtype)
+
+        prompt = "an image of a shiba inu, donning a spacesuit and helmet"
+        torch.manual_seed(0)
+        prior_output = prior_pipe(prompt, output_type="np")

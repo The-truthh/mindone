@@ -22,9 +22,12 @@ from transformers import CLIPTextConfig
 
 import mindspore as ms
 
+from mindone.diffusers.utils.testing_utils import load_downloaded_image_from_hf_hub, load_downloaded_numpy_from_hf_hub
+
 from ..pipeline_test_utils import (
     THRESHOLD_FP16,
     THRESHOLD_FP32,
+    THRESHOLD_PIXEL,
     PipelineTesterMixin,
     get_module,
     get_pipeline_components,
@@ -190,3 +193,34 @@ class StableCascadeDecoderPipelineFastTests(PipelineTesterMixin, unittest.TestCa
 
         threshold = THRESHOLD_FP32 if dtype == "float32" else THRESHOLD_FP16
         assert np.max(np.linalg.norm(pt_image_slice - ms_image_slice) / np.linalg.norm(pt_image_slice)) < threshold
+
+
+@ddt
+class StableCascadeDecoderPipelineIntegrationTests(PipelineTesterMixin, unittest.TestCase):
+    @data(*test_cases)
+    @unpack
+    def test_stable_cascade_decoder(self, mode, dtype):
+        if mode == ms.GRAPH_MODE:
+            ms.set_context(mode=mode, max_call_depth=2000)
+        else:
+            ms.set_context(mode=mode)
+        ms_dtype = getattr(ms, dtype)
+
+        prior_pipe_cls = get_module("mindone.diffusers.pipelines.stable_cascade.StableCascadePriorPipeline")
+        prior_pipe = prior_pipe_cls.from_pretrained("stabilityai/stable-cascade-prior", mindspore_dtype=ms_dtype)
+        gen_pipe_cls = get_module("mindone.diffusers.pipelines.stable_cascade.StableCascadeDecoderPipeline")
+        gen_pipe = gen_pipe_cls.from_pretrained("stabilityai/stable-cascade", mindspore_dtype=ms_dtype)
+
+        prompt = "an image of a shiba inu, donning a spacesuit and helmet"
+
+        torch.manual_seed(0)
+        prior_output = prior_pipe(prompt)
+        torch.manual_seed(0)
+        image = gen_pipe(prior_output[0], prompt=prompt)[0][0]
+
+        expected_image = load_downloaded_numpy_from_hf_hub(
+            "The-truth/mindone-testing-arrays",
+            f"stable_cascade_decoder_{dtype}.npy",
+            subfolder="stable_cascade",
+        )
+        assert np.mean(np.abs(np.array(image, dtype=np.float32) - expected_image)) < THRESHOLD_PIXEL

@@ -21,9 +21,12 @@ from ddt import data, ddt, unpack
 
 import mindspore as ms
 
+from mindone.diffusers.utils.testing_utils import load_downloaded_image_from_hf_hub, load_downloaded_numpy_from_hf_hub
+
 from ..pipeline_test_utils import (
     THRESHOLD_FP16,
     THRESHOLD_FP32,
+    THRESHOLD_PIXEL,
     PipelineTesterMixin,
     get_module,
     get_pipeline_components,
@@ -113,3 +116,28 @@ class DDIMPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
 
         threshold = THRESHOLD_FP32 if dtype == "float32" else THRESHOLD_FP16
         assert np.max(np.linalg.norm(pt_image_slice - ms_image_slice) / np.linalg.norm(pt_image_slice)) < threshold
+
+
+@ddt
+class DDIMPipelineIntegrationTests(PipelineTesterMixin, unittest.TestCase):
+    @data(*test_cases)
+    @unpack
+    def test_inference_cifar10(self, mode, dtype):
+        ms.set_context(mode=mode)
+        ms_dtype = getattr(ms, dtype)
+
+        model_id = "google/ddpm-cifar10-32"
+
+        pipe_cls = get_module("mindone.diffusers.pipelines.ddim.DDIMPipeline")
+        ddim = pipe_cls.from_pretrained(model_id, use_safetensors=True, mindspore_dtype=ms_dtype)
+        ddim.set_progress_bar_config(disable=None)
+
+        torch.manual_seed(0)
+        image = ddim(eta=0.0)[0][0]
+
+        expected_image = load_downloaded_numpy_from_hf_hub(
+            "The-truth/mindone-testing-arrays",
+            f"ddim_{dtype}.npy",
+            subfolder="ddim",
+        )
+        assert np.mean(np.abs(np.array(image, dtype=np.float32) - expected_image)) < THRESHOLD_PIXEL

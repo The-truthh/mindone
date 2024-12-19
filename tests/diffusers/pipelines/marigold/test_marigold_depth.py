@@ -27,9 +27,12 @@ from transformers import CLIPTextConfig
 
 import mindspore as ms
 
+from mindone.diffusers.utils.testing_utils import load_downloaded_image_from_hf_hub, load_downloaded_numpy_from_hf_hub, load_image
+
 from ..pipeline_test_utils import (
     THRESHOLD_FP16,
     THRESHOLD_FP32,
+    THRESHOLD_PIXEL,
     PipelineTesterMixin,
     floats_tensor,
     get_module,
@@ -214,3 +217,51 @@ class MarigoldDepthPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
     @unpack
     def test_marigold_depth_dummy_defaults(self, mode, dtype):
         self._test_marigold_depth(generator_seed=0, mode=mode, dtype=dtype)
+
+
+@ddt
+class MarigoldDepthPipelineIntegrationTests(PipelineTesterMixin, unittest.TestCase):
+    def _test_marigold_depth(
+        self,
+        mode: int,
+        dtype: str,
+        generator_seed: int = 0,
+        model_id: str = "prs-eth/marigold-lcm-v1-0",
+        **pipe_kwargs,
+    ):
+        ms.set_context(mode=mode)
+        ms_dtype = getattr(ms, dtype)
+
+        pipe_cls = get_module("mindone.diffusers.pipelines.marigold.MarigoldDepthPipeline")
+        pipe = pipe_cls.from_pretrained(model_id, variant="fp16", mindspore_dtype=ms_dtype)
+        pipe.set_progress_bar_config(disable=None)
+
+        image = load_downloaded_image_from_hf_hub(
+            "The-truth/mindone-testing-arrays",
+            f"marigold_input.jpg",
+            subfolder="marigold",
+        )
+
+        torch.manual_seed(generator_seed)
+        prediction = pipe(image, **pipe_kwargs)[0]
+
+        expected_image = load_downloaded_numpy_from_hf_hub(
+            "The-truth/mindone-testing-arrays",
+            f"marigold_depth_{dtype}.npy",
+            subfolder="marigold",
+        )
+        assert np.mean(np.abs(np.array(prediction, dtype=np.float32) - expected_image)) < THRESHOLD_PIXEL
+
+    @data(*test_cases)
+    @unpack
+    def test_marigold_depth_einstein_f32_cpu_G0_S1_P32_E1_B1_M1(self, mode, dtype):
+        self._test_marigold_depth(
+            mode=mode,
+            dtype=dtype,
+            generator_seed=0,
+            num_inference_steps=1,
+            processing_resolution=32,
+            ensemble_size=1,
+            batch_size=1,
+            match_input_resolution=True,
+        )
