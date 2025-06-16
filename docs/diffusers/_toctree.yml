@@ -172,6 +172,8 @@
         title: FluxControlNetModel
       - local: api/models/controlnet_hunyuandit
         title: HunyuanDiT2DControlNetModel
+      - local: api/models/controlnet_sana
+        title: SanaControlNetModel
       - local: api/models/controlnet_sd3
         title: SD3ControlNetModel
       - local: api/models/controlnet_sparsectrl
@@ -302,12 +304,16 @@
       title: Flux
     - local: api/pipelines/control_flux_inpaint
       title: FluxControlInpaint
+    - local: api/pipelines/framepack
+      title: Framepack
     - local: api/pipelines/controlnet_hunyuandit
       title: ControlNet with Hunyuan-DiT
     - local: api/pipelines/controlnet_sd3
       title: ControlNet with Stable Diffusion 3
     - local: api/pipelines/controlnet_sdxl
       title: ControlNet with Stable Diffusion XL
+    - local: api/pipelines/controlnet_sana
+      title: ControlNet-Sana
     - local: api/pipelines/controlnetxs
       title: ControlNet-XS
     - local: api/pipelines/controlnetxs_sdxl
@@ -426,6 +432,10 @@
       title: Text2Video-Zero
     - local: api/pipelines/unclip
       title: unCLIP
+    - local: api/pipelines/unidiffuser
+      title: UniDiffuser
+    - local: api/pipelines/visualcloze
+      title: VisualCloze
     - local: api/pipelines/wuerstchen
       title: Wuerstchen
     title: Pipelines

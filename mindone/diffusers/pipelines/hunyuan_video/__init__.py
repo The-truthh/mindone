@@ -6,9 +6,11 @@ _dummy_objects = {}
 _import_structure = {}
 
 _import_structure["pipeline_hunyuan_video"] = ["HunyuanVideoPipeline"]
+_import_structure["pipeline_hunyuan_video_framepack"] = ["HunyuanVideoFramepackPipeline"]
 
 if TYPE_CHECKING:
     from .pipeline_hunyuan_video import HunyuanVideoPipeline
+    from .pipeline_hunyuan_video_framepack import HunyuanVideoFramepackPipeline
 else:
     import sys
 
