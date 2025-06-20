@@ -30,7 +30,7 @@ from .feature_extraction_utils import BatchFeature, FeatureExtractionMixin
 from .image_processing_base import ImageProcessingMixin
 from .image_processing_utils import BaseImageProcessor
 from .image_utils import ImageFeatureExtractionMixin
-from .modeling_utils import MSPreTrainedModel
+from .modeling_utils import MSPreTrainedModel, PreTrainedModel
 from .models.albert import (
     AlbertForMaskedLM,
     AlbertForMultipleChoice,
@@ -137,6 +137,7 @@ from .models.auto import (
     AutoModelWithLMHead,
     AutoProcessor,
 )
+from .models.aya_vision import AyaVisionForConditionalGeneration, AyaVisionPreTrainedModel
 from .models.bart import (
     BartForCausalLM,
     BartForConditionalGeneration,
@@ -199,6 +200,13 @@ from .models.blip_2 import (
     Blip2PreTrainedModel,
     Blip2QFormerModel,
     Blip2VisionModel,
+)
+from .models.bridgetower import (
+    BridgeTowerForContrastiveLearning,
+    BridgeTowerForImageAndTextRetrieval,
+    BridgeTowerForMaskedLM,
+    BridgeTowerModel,
+    BridgeTowerPreTrainedModel,
 )
 from .models.camembert import (
     CamembertForCausalLM,
@@ -542,6 +550,7 @@ from .models.qwen2_vl import (
     Qwen2VLModel,
     Qwen2VLPreTrainedModel,
 )
+from .models.rag import RagModel, RagPreTrainedModel, RagSequenceForGeneration, RagTokenForGeneration
 from .models.recurrent_gemma import RecurrentGemmaForCausalLM, RecurrentGemmaModel, RecurrentGemmaPreTrainedModel
 from .models.rembert import (
     RemBertForCausalLM,
@@ -626,6 +635,7 @@ from .models.t5 import (
     T5Model,
     T5PreTrainedModel,
 )
+from .models.textnet import TextNetBackbone, TextNetForImageClassification, TextNetModel, TextNetPreTrainedModel
 from .models.umt5 import (
     UMT5EncoderModel,
     UMT5ForQuestionAnswering,
