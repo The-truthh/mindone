@@ -928,7 +928,11 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
         # when we init a model from within another model (e.g. VLMs) and dispatch on FA2
         # a warning is raised that dtype should be fp16. Since we never pass dtype from within
         # modeling code, we can try to infer it here same way as done in `from_pretrained`
-        mindspore_dtype = kwargs.pop("torch_dtype", config.torch_dtype)
+        if hasattr(config, "mindspore_dtype"):
+            mindspore_dtype = kwargs.pop("mindspore_dtype", config.mindspore_dtype)
+        else:
+            mindspore_dtype = kwargs.pop("torch_dtype", config.torch_dtype)
+
         if isinstance(mindspore_dtype, str):
             mindspore_dtype = getattr(ms, mindspore_dtype)
 
@@ -1149,7 +1153,7 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
                 output_embeddings.weight = input_embeddings.weight
 
         if getattr(output_embeddings, "bias", None) is not None:
-            output_embeddings.bias = ops.pad(
+            output_embeddings.bias = mint.nn.functional.pad(
                 output_embeddings.bias,
                 (
                     0,
@@ -2279,6 +2283,9 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
 
             if mindspore_dtype is not None:
                 config.mindspore_dtype = dtype_to_str(mindspore_dtype)
+                for sub_config_key in config.sub_configs.keys():
+                    sub_config = getattr(config, sub_config_key)
+                    sub_config.mindspore_dtype = mindspore_dtype
                 if isinstance(mindspore_dtype, str):
                     if mindspore_dtype == "auto":
                         if hasattr(config, "torch_dtype") and config.torch_dtype is not None:
@@ -2412,6 +2419,50 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
 
         return model
 
+    @staticmethod
+    def _fix_state_dict_key_on_load(key: str) -> Tuple[str, bool]:
+        """Replace legacy parameter names with their modern equivalents. E.g. beta -> bias, gamma -> weight."""
+        # Rename LayerNorm beta & gamma params for some early models ported from Tensorflow (e.g. Bert)
+        # This rename is logged.
+        if key.endswith("LayerNorm.beta"):
+            return key.replace("LayerNorm.beta", "LayerNorm.bias"), True
+        if key.endswith("LayerNorm.gamma"):
+            return key.replace("LayerNorm.gamma", "LayerNorm.weight"), True
+
+        return key, False
+
+    def _get_key_renaming_mapping(self, checkpoint_keys: List[str]):
+        """
+        Compute a mapping between the serialized keys on disk `checkpoint_keys`, and the keys that the model
+        that we are loading expects. This is the single entry point for key renaming that will be used during
+        loading.
+        Log if any parameters have been renamed.
+        """
+        renamed_keys = {}
+        key_renaming_mapping = {}
+        for key in checkpoint_keys:
+            # Class specific rename
+            new_key, has_changed = self._fix_state_dict_key_on_load(key)
+
+            key_renaming_mapping[key] = new_key
+
+            # track gamma/beta rename for logging
+            if has_changed:
+                if key.endswith("LayerNorm.gamma"):
+                    renamed_keys["LayerNorm.gamma"] = (key, new_key)
+                elif key.endswith("LayerNorm.beta"):
+                    renamed_keys["LayerNorm.beta"] = (key, new_key)
+
+        if renamed_keys:
+            warning_msg = f"A pretrained model of type `{self.__class__.__name__}` "
+            warning_msg += "contains parameters that have been renamed internally (a few are listed below but more are present in the model):\n"
+            for old_key, new_key in renamed_keys.values():
+                warning_msg += f"* `{old_key}` -> `{new_key}`\n"
+            warning_msg += "If you are using a model from the Hub, consider submitting a PR to adjust these weights and help future users."
+            logger.info_once(warning_msg)
+
+        return key_renaming_mapping
+
     @classmethod
     def _load_pretrained_model(
         cls,
@@ -2443,6 +2494,9 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
         # Mapping loaded_keys from pt to ms
         pt2ms_mappings = _get_pt2ms_mappings(model)
         loaded_keys = _get_pt2ms_mapped_k(pt2ms_mappings, has_prefix_module, expects_prefix_module, loaded_keys, prefix)
+
+        # Find the key names that the model expects from the serialized keys
+        key_renaming_mapping = model._get_key_renaming_mapping(loaded_keys)
 
         # key re-naming operations are never done on the keys
         # that are loaded, but always on the keys of the newly initialized model
@@ -2541,6 +2595,12 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
                 remove_prefix_from_model,
                 ignore_mismatched_sizes,
             )
+
+            # We need to update both the mapping and the list of checkpoint keys to remove the mismatched ones
+            key_renaming_mapping = {k: v for k, v in key_renaming_mapping.items() if v not in mismatched_keys}
+            # Fix the key names
+            state_dict = {key_renaming_mapping[k]: v for k, v in state_dict.items() if k in key_renaming_mapping}
+
             error_msgs = _load_state_dict_into_model(model_to_load, state_dict, start_prefix, is_sharded=False)
         else:
             # Sharded checkpoint or whole but low_cpu_mem_usage==True

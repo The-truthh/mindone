@@ -1,9 +1,5 @@
 # coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# This code is adapted from https://github.com/huggingface/transformers
-# with modifications to run transformers on mindspore.
+# Copyright 2022 The HuggingFace Inc. team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,24 +12,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""MindSpore BERT model."""
+"""MindSpore ERNIE model."""
 
-import numbers
+import math
 import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
-from transformers.models.bert.configuration_bert import BertConfig
-from transformers.utils import ModelOutput, logging
+from transformers.models.ernie.configuration_ernie import ErnieConfig
+from transformers.utils import ModelOutput
 
 import mindspore as ms
-from mindspore import mint, nn, ops
-from mindspore.common.initializer import Normal, One, Zero, initializer
+from mindspore import mint, nn
+from mindspore.mint.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from ...activations import ACT2FN
-from ...mindspore_utils import find_pruneable_heads_and_indices, prune_linear_layer
-from ...modeling_attn_mask_utils import _prepare_4d_attention_mask, _prepare_4d_causal_attention_mask
+from ...generation import GenerationMixin
 from ...modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
@@ -45,34 +39,18 @@ from ...modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
-from ...modeling_utils import MSPreTrainedModel
+from ...modeling_utils import PreTrainedModel
+from ...mindspore_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
+from ...utils import logging
+
 
 logger = logging.get_logger(__name__)
 
-_CHECKPOINT_FOR_DOC = "google-bert/bert-base-uncased"
-_CONFIG_FOR_DOC = "BertConfig"
-
-# TokenClassification docstring
-_CHECKPOINT_FOR_TOKEN_CLASSIFICATION = "dbmdz/bert-large-cased-finetuned-conll03-english"
-_TOKEN_CLASS_EXPECTED_OUTPUT = (
-    "['O', 'I-ORG', 'I-ORG', 'I-ORG', 'O', 'O', 'O', 'O', 'O', 'I-LOC', 'O', 'I-LOC', 'I-LOC'] "
-)
-_TOKEN_CLASS_EXPECTED_LOSS = 0.01
-
-# QuestionAnswering docstring
-_CHECKPOINT_FOR_QA = "deepset/bert-base-cased-squad2"
-_QA_EXPECTED_OUTPUT = "'a nice puppet'"
-_QA_EXPECTED_LOSS = 7.41
-_QA_TARGET_START_INDEX = 14
-_QA_TARGET_END_INDEX = 15
-
-# SequenceClassification docstring
-_CHECKPOINT_FOR_SEQUENCE_CLASSIFICATION = "textattack/bert-base-uncased-yelp-polarity"
-_SEQ_CLASS_EXPECTED_OUTPUT = "'LABEL_1'"
-_SEQ_CLASS_EXPECTED_LOSS = 0.01
+_CHECKPOINT_FOR_DOC = "nghuyong/ernie-1.0-base-zh"
+_CONFIG_FOR_DOC = "ErnieConfig"
 
 
-class BertEmbeddings(nn.Cell):
+class ErnieEmbeddings(nn.Cell):
     """Construct the embeddings from word, position and token_type embeddings."""
 
     def __init__(self, config):
@@ -80,20 +58,28 @@ class BertEmbeddings(nn.Cell):
         self.word_embeddings = mint.nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.position_embeddings = mint.nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = mint.nn.Embedding(config.type_vocab_size, config.hidden_size)
+        self.use_task_id = config.use_task_id
+        if config.use_task_id:
+            self.task_type_embeddings = mint.nn.Embedding(config.task_type_vocab_size, config.hidden_size)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = mint.nn.LayerNorm((config.hidden_size,), eps=config.layer_norm_eps)
-        self.dropout = mint.nn.Dropout(p=config.hidden_dropout_prob)
+        self.LayerNorm = mint.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = mint.nn.Dropout(config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
-        self.position_ids = mint.arange(config.max_position_embeddings).broadcast_to((1, -1))
-        self.token_type_ids = mint.zeros(self.position_ids.shape, dtype=ms.int32)
+        self.position_ids = ms.Parameter(
+            mint.arange(config.max_position_embeddings).broadcast_to((1, -1)), requires_grad=False, name="position_ids"
+        )
+        self.token_type_ids = ms.Parameter(
+            mint.zeros(self.position_ids.shape, dtype=ms.int64), requires_grad=False, name="token_type_ids"
+        )
 
     def construct(
         self,
         input_ids: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
         past_key_values_length: int = 0,
@@ -117,22 +103,31 @@ class BertEmbeddings(nn.Cell):
                 buffered_token_type_ids_expanded = buffered_token_type_ids.broadcast_to((input_shape[0], seq_length))
                 token_type_ids = buffered_token_type_ids_expanded
             else:
-                token_type_ids = mint.zeros(input_shape, dtype=ms.int32)
+                token_type_ids = mint.zeros(input_shape, dtype=ms.int64)
 
         if inputs_embeds is None:
-            inputs_embeds = self.word_embeddings(input_ids.int())
+            inputs_embeds = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
         embeddings = inputs_embeds + token_type_embeddings
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
+
+        # add `task_type_id` for ERNIE model
+        if self.use_task_id:
+            if task_type_ids is None:
+                task_type_ids = mint.zeros(input_shape, dtype=ms.int64)
+            task_type_embeddings = self.task_type_embeddings(task_type_ids)
+            embeddings += task_type_embeddings
+
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
 
 
-class BertSelfAttention(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertSelfAttention with Bert->Ernie
+class ErnieSelfAttention(nn.Cell):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -149,8 +144,10 @@ class BertSelfAttention(nn.Cell):
         self.key = mint.nn.Linear(config.hidden_size, self.all_head_size)
         self.value = mint.nn.Linear(config.hidden_size, self.all_head_size)
 
-        self.dropout = mint.nn.Dropout(p=config.attention_probs_dropout_prob)
-        self.position_embedding_type = position_embedding_type or getattr(config, "position_embedding_type", "absolute")
+        self.dropout = mint.nn.Dropout(config.attention_probs_dropout_prob)
+        self.position_embedding_type = position_embedding_type or getattr(
+            config, "position_embedding_type", "absolute"
+        )
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             self.max_position_embeddings = config.max_position_embeddings
             self.distance_embedding = mint.nn.Embedding(
@@ -218,44 +215,30 @@ class BertSelfAttention(nn.Cell):
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             query_length, key_length = query_layer.shape[2], key_layer.shape[2]
             if use_cache:
-                position_ids_l = ms.tensor(key_length - 1, dtype=ms.int32).view(-1, 1)
+                position_ids_l = ms.tensor(key_length - 1, dtype=ms.int64).view(-1, 1)
             else:
-                position_ids_l = mint.arange(query_length, dtype=ms.int32).view(-1, 1)
-            position_ids_r = mint.arange(key_length, dtype=ms.int32).view(1, -1)
+                position_ids_l = mint.arange(query_length, dtype=ms.int64).view(-1, 1)
+            position_ids_r = mint.arange(key_length, dtype=ms.int64).view(1, -1)
             distance = position_ids_l - position_ids_r
 
             positional_embedding = self.distance_embedding(distance + self.max_position_embeddings - 1)
             positional_embedding = positional_embedding.to(dtype=query_layer.dtype)  # fp16 compatibility
 
             if self.position_embedding_type == "relative_key":
-                relative_position_scores = mint.matmul(
-                    query_layer.unsqueeze(3), positional_embedding.permute(0, 2, 1)
-                ).squeeze(
-                    3
-                )  # "bhld,lrd->bhlr"
+                relative_position_scores = mint.einsum("bhld,lrd->bhlr", query_layer, positional_embedding)
                 attention_scores = attention_scores + relative_position_scores
             elif self.position_embedding_type == "relative_key_query":
-                relative_position_scores_query = mint.matmul(
-                    query_layer.unsqueeze(3), positional_embedding.permute(0, 2, 1)
-                ).squeeze(
-                    3
-                )  # "bhld,lrd->bhlr"
-                relative_position_scores_key = (
-                    key_layer[:, :, None, :, :] * positional_embedding[None, None, :, :, :]
-                ).sum(
-                    -1
-                )  # "bhrd,lrd->bhlr"
+                relative_position_scores_query = mint.einsum("bhld,lrd->bhlr", query_layer, positional_embedding)
+                relative_position_scores_key = mint.einsum("bhrd,lrd->bhlr", key_layer, positional_embedding)
                 attention_scores = attention_scores + relative_position_scores_query + relative_position_scores_key
 
-        attention_scores = attention_scores / mint.sqrt(
-            ms.tensor(self.attention_head_size, dtype=attention_scores.dtype)
-        )
+        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+            # Apply the attention mask is (precomputed for all layers in ErnieModel forward() function)
             attention_scores = attention_scores + attention_mask
 
         # Normalize the attention scores to probabilities.
-        attention_probs = mint.softmax(attention_scores, dim=-1)
+        attention_probs = mint.nn.functional.softmax(attention_scores, dim=-1)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -267,7 +250,7 @@ class BertSelfAttention(nn.Cell):
 
         context_layer = mint.matmul(attention_probs, value_layer)
 
-        context_layer = context_layer.permute(0, 2, 1, 3)
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.shape[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(new_context_layer_shape)
 
@@ -278,100 +261,13 @@ class BertSelfAttention(nn.Cell):
         return outputs
 
 
-class BertSdpaSelfAttention(BertSelfAttention):
-    def __init__(self, config, position_embedding_type=None):
-        super().__init__(config, position_embedding_type=position_embedding_type)
-        self.dropout_prob = config.attention_probs_dropout_prob
-
-    # Adapted from BertSelfAttention
-    def construct(
-        self,
-        hidden_states: ms.Tensor,
-        attention_mask: Optional[ms.Tensor] = None,
-        head_mask: Optional[ms.Tensor] = None,
-        encoder_hidden_states: Optional[ms.Tensor] = None,
-        encoder_attention_mask: Optional[ms.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[ms.Tensor]]] = None,
-        output_attentions: Optional[bool] = False,
-    ) -> Tuple[ms.Tensor]:
-        if self.position_embedding_type != "absolute" or output_attentions or head_mask is not None:
-            # TODO: Improve this warning with e.g. `model.config._attn_implementation = "manual"` once implemented.
-            logger.warning_once(
-                "BertSdpaSelfAttention is used but `scaled_dot_product_attention` does not support "
-                "non-absolute `position_embedding_type` or `output_attentions=True` or `head_mask`. Falling back to "
-                "the manual attention implementation, but specifying the manual implementation will be required from "
-                "Transformers version v5.0.0 onwards. This warning can be removed using the argument "
-                '`attn_implementation="eager"` when loading the model.'
-            )
-            return super().construct(
-                hidden_states,
-                attention_mask,
-                head_mask,
-                encoder_hidden_states,
-                encoder_attention_mask,
-                past_key_value,
-                output_attentions,
-            )
-
-        bsz, tgt_len, _ = hidden_states.shape
-
-        query_layer = self.transpose_for_scores(self.query(hidden_states))
-
-        # If this is instantiated as a cross-attention module, the keys and values come from an encoder; the attention
-        # mask needs to be such that the encoder's padding tokens are not attended to.
-        is_cross_attention = encoder_hidden_states is not None
-
-        current_states = encoder_hidden_states if is_cross_attention else hidden_states
-        attention_mask = encoder_attention_mask if is_cross_attention else attention_mask
-
-        # Check `seq_length` of `past_key_value` == `len(current_states)` to support prefix tuning
-        if is_cross_attention and past_key_value and past_key_value[0].shape[2] == current_states.shape[1]:
-            key_layer, value_layer = past_key_value
-        else:
-            key_layer = self.transpose_for_scores(self.key(current_states))
-            value_layer = self.transpose_for_scores(self.value(current_states))
-            if past_key_value is not None and not is_cross_attention:
-                key_layer = mint.cat([past_key_value[0], key_layer], dim=2)
-                value_layer = mint.cat([past_key_value[1], value_layer], dim=2)
-
-        if self.is_decoder:
-            # if cross_attention save Tuple(ms.Tensor, ms.Tensor) of all cross attention key/value_states.
-            # Further calls to cross_attention layer can then reuse all cross-attention
-            # key/value_states (first "if" case)
-            # if uni-directional self-attention (decoder) save Tuple(ms.Tensor, ms.Tensor) of
-            # all previous decoder key/value_states. Further calls to uni-directional self-attention
-            # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
-            # if encoder bi-directional self-attention `past_key_value` is always `None`
-            past_key_value = (key_layer, value_layer)
-
-        # The tgt_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create
-        # a causal mask in case tgt_len == 1.
-        # is_causal = (
-        #     True if self.is_decoder and not is_cross_attention and attention_mask is None and tgt_len > 1 else False
-        # )
-
-        attn_output = scaled_dot_product_attention(
-            query_layer,
-            key_layer,
-            value_layer,
-            attn_mask=attention_mask,
-        )
-
-        attn_output = attn_output.swapaxes(1, 2)
-        attn_output = attn_output.reshape(bsz, tgt_len, self.all_head_size)
-
-        outputs = (attn_output,)
-        if self.is_decoder:
-            outputs = outputs + (past_key_value,)
-        return outputs
-
-
-class BertSelfOutput(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertSelfOutput with Bert->Ernie
+class ErnieSelfOutput(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = mint.nn.Linear(config.hidden_size, config.hidden_size)
-        self.LayerNorm = mint.nn.LayerNorm((config.hidden_size,), eps=config.layer_norm_eps)
-        self.dropout = mint.nn.Dropout(p=config.hidden_dropout_prob)
+        self.LayerNorm = mint.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = mint.nn.Dropout(config.hidden_dropout_prob)
 
     def construct(self, hidden_states: ms.Tensor, input_tensor: ms.Tensor) -> ms.Tensor:
         hidden_states = self.dense(hidden_states)
@@ -380,19 +276,19 @@ class BertSelfOutput(nn.Cell):
         return hidden_states
 
 
-BERT_SELF_ATTENTION_CLASSES = {
-    "eager": BertSelfAttention,
-    "sdpa": BertSdpaSelfAttention,
+ERNIE_SELF_ATTENTION_CLASSES = {
+    "eager": ErnieSelfAttention,
 }
 
 
-class BertAttention(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertAttention with Bert->Ernie,BERT->ERNIE
+class ErnieAttention(nn.Cell):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = BERT_SELF_ATTENTION_CLASSES[config._attn_implementation](
+        self.self = ERNIE_SELF_ATTENTION_CLASSES[config._attn_implementation](
             config, position_embedding_type=position_embedding_type
         )
-        self.output = BertSelfOutput(config)
+        self.output = ErnieSelfOutput(config)
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
@@ -437,7 +333,8 @@ class BertAttention(nn.Cell):
         return outputs
 
 
-class BertIntermediate(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertIntermediate with Bert->Ernie
+class ErnieIntermediate(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = mint.nn.Linear(config.hidden_size, config.intermediate_size)
@@ -452,12 +349,13 @@ class BertIntermediate(nn.Cell):
         return hidden_states
 
 
-class BertOutput(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertOutput with Bert->Ernie
+class ErnieOutput(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = mint.nn.Linear(config.intermediate_size, config.hidden_size)
-        self.LayerNorm = mint.nn.LayerNorm((config.hidden_size,), eps=config.layer_norm_eps)
-        self.dropout = mint.nn.Dropout(p=config.hidden_dropout_prob)
+        self.LayerNorm = mint.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = mint.nn.Dropout(config.hidden_dropout_prob)
 
     def construct(self, hidden_states: ms.Tensor, input_tensor: ms.Tensor) -> ms.Tensor:
         hidden_states = self.dense(hidden_states)
@@ -466,20 +364,21 @@ class BertOutput(nn.Cell):
         return hidden_states
 
 
-class BertLayer(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertLayer with Bert->Ernie
+class ErnieLayer(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = BertAttention(config)
+        self.attention = ErnieAttention(config)
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
         if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
-            self.crossattention = BertAttention(config, position_embedding_type="absolute")
-        self.intermediate = BertIntermediate(config)
-        self.output = BertOutput(config)
+            self.crossattention = ErnieAttention(config, position_embedding_type="absolute")
+        self.intermediate = ErnieIntermediate(config)
+        self.output = ErnieOutput(config)
 
     def construct(
         self,
@@ -535,7 +434,9 @@ class BertLayer(nn.Cell):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        layer_output = self.feed_forward_chunk(attention_output)
+        layer_output = apply_chunking_to_forward(
+            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
+        )
         outputs = (layer_output,) + outputs
 
         # if decoder, return the attn key/values as the last output
@@ -550,12 +451,12 @@ class BertLayer(nn.Cell):
         return layer_output
 
 
-class BertEncoder(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertEncoder with Bert->Ernie
+class ErnieEncoder(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.add_cross_attention = config.add_cross_attention
-        self.layer = nn.CellList([BertLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.CellList([ErnieLayer(config) for _ in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
 
     def construct(
@@ -573,7 +474,7 @@ class BertEncoder(nn.Cell):
     ) -> Union[Tuple[ms.Tensor], BaseModelOutputWithPastAndCrossAttentions]:
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
-        all_cross_attentions = () if output_attentions and self.add_cross_attention else None
+        all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -590,25 +491,22 @@ class BertEncoder(nn.Cell):
             layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
 
-            if self.gradient_checkpointing and self.training:
-                raise NotImplementedError("Gradient checkpoint is not yet supported.")
-            else:
-                layer_outputs = layer_module(
-                    hidden_states,
-                    attention_mask,
-                    layer_head_mask,
-                    encoder_hidden_states,
-                    encoder_attention_mask,
-                    past_key_value,
-                    output_attentions,
-                )
+            layer_outputs = layer_module(
+                hidden_states,
+                attention_mask,
+                layer_head_mask,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                past_key_value,
+                output_attentions,
+            )
 
             hidden_states = layer_outputs[0]
             if use_cache:
                 next_decoder_cache += (layer_outputs[-1],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
-                if self.add_cross_attention:
+                if self.config.add_cross_attention:
                     all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
 
         if output_hidden_states:
@@ -635,7 +533,8 @@ class BertEncoder(nn.Cell):
         )
 
 
-class BertPooler(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertPooler with Bert->Ernie
+class ErniePooler(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = mint.nn.Linear(config.hidden_size, config.hidden_size)
@@ -650,7 +549,8 @@ class BertPooler(nn.Cell):
         return pooled_output
 
 
-class BertPredictionHeadTransform(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertPredictionHeadTransform with Bert->Ernie
+class ErniePredictionHeadTransform(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = mint.nn.Linear(config.hidden_size, config.hidden_size)
@@ -667,16 +567,17 @@ class BertPredictionHeadTransform(nn.Cell):
         return hidden_states
 
 
-class BertLMPredictionHead(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertLMPredictionHead with Bert->Ernie
+class ErnieLMPredictionHead(nn.Cell):
     def __init__(self, config):
         super().__init__()
-        self.transform = BertPredictionHeadTransform(config)
+        self.transform = ErniePredictionHeadTransform(config)
 
         # The output weights are the same as the input embeddings, but there is
         # an output-only bias for each token.
         self.decoder = mint.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        self.bias = ms.Parameter(mint.zeros(config.vocab_size), name="bias")
+        self.bias = ms.Parameter(mint.zeros(config.vocab_size))
 
         # Need a link between the two variables so that the bias is correctly resized with `resize_token_embeddings`
         self.decoder.bias = self.bias
@@ -690,17 +591,19 @@ class BertLMPredictionHead(nn.Cell):
         return hidden_states
 
 
-class BertOnlyMLMHead(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertOnlyMLMHead with Bert->Ernie
+class ErnieOnlyMLMHead(nn.Cell):
     def __init__(self, config):
         super().__init__()
-        self.predictions = BertLMPredictionHead(config)
+        self.predictions = ErnieLMPredictionHead(config)
 
     def construct(self, sequence_output: ms.Tensor) -> ms.Tensor:
         prediction_scores = self.predictions(sequence_output)
         return prediction_scores
 
 
-class BertOnlyNSPHead(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertOnlyNSPHead with Bert->Ernie
+class ErnieOnlyNSPHead(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.seq_relationship = mint.nn.Linear(config.hidden_size, 2)
@@ -710,10 +613,11 @@ class BertOnlyNSPHead(nn.Cell):
         return seq_relationship_score
 
 
-class BertPreTrainingHeads(nn.Cell):
+# Copied from transformers.models.bert.modeling_bert.BertPreTrainingHeads with Bert->Ernie
+class ErniePreTrainingHeads(nn.Cell):
     def __init__(self, config):
         super().__init__()
-        self.predictions = BertLMPredictionHead(config)
+        self.predictions = ErnieLMPredictionHead(config)
         self.seq_relationship = mint.nn.Linear(config.hidden_size, 2)
 
     def construct(self, sequence_output, pooled_output):
@@ -722,48 +626,28 @@ class BertPreTrainingHeads(nn.Cell):
         return prediction_scores, seq_relationship_score
 
 
-class BertPreTrainedModel(MSPreTrainedModel):
+class ErniePreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
     """
 
-    config_class = BertConfig
-    base_model_prefix = "bert"
+    config_class = ErnieConfig
+    base_model_prefix = "ernie"
     supports_gradient_checkpointing = True
-    _supports_sdpa = True
+
+    _supports_dynamic_input = True
 
     def _init_weights(self, module):
         """Initialize the weights"""
-        if isinstance(module, mint.nn.Linear):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.set_data(
-                initializer(
-                    Normal(sigma=self.config.initializer_range, mean=0.0), module.weight.shape, module.weight.dtype
-                )
-            )
-            if module.bias is not None:
-                module.bias.set_data(initializer(Zero(), module.bias.shape, module.bias.dtype))
-        elif isinstance(module, mint.nn.Embedding):
-            module.weight.set_data(
-                initializer(
-                    Normal(sigma=self.config.initializer_range, mean=0.0),
-                    module.weight.shape,
-                    module.weight.dtype,
-                )
-            )
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx] = 0
-        elif isinstance(module, mint.nn.LayerNorm):
-            module.bias.set_data(initializer(Zero(), module.bias.shape, module.bias.dtype))
-            module.weight.set_data(initializer(One(), module.weight.shape, module.weight.dtype))
+        pass
 
 
 @dataclass
-class BertForPreTrainingOutput(ModelOutput):
+# Copied from transformers.models.bert.modeling_bert.BertForPreTrainingOutput with Bert->Ernie
+class ErnieForPreTrainingOutput(ModelOutput):
     """
-    Output type of [`BertForPreTraining`].
+    Output type of [`ErnieForPreTraining`].
 
     Args:
         loss (*optional*, returned when `labels` is provided, `ms.Tensor` of shape `(1,)`):
@@ -788,13 +672,85 @@ class BertForPreTrainingOutput(ModelOutput):
     """
 
     loss: Optional[ms.Tensor] = None
-    prediction_logits: ms.Tensor = None
-    seq_relationship_logits: ms.Tensor = None
+    prediction_logits: Optional[ms.Tensor] = None
+    seq_relationship_logits: Optional[ms.Tensor] = None
     hidden_states: Optional[Tuple[ms.Tensor]] = None
     attentions: Optional[Tuple[ms.Tensor]] = None
 
 
-class BertModel(BertPreTrainedModel):
+ERNIE_START_DOCSTRING = r"""
+
+    This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
+    library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
+    etc.)
+
+    This model is also a MindSpore
+    [ms.nn.Cell](https://www.mindspore.cn/docs/zh-CN/master/api_python/nn/mindspore.nn.Cell.html) subclass.
+    Use it as a regular MindSpore Cell and refer to the MindSpore documentation for all matter related to general usage
+    and behavior.
+
+    Parameters:
+        config ([`ErnieConfig`]): Model configuration class with all the parameters of the model.
+            Initializing with a config file does not load the weights associated with the model, only the
+            configuration. Check out the [`~PreTrainedModel.from_pretrained`] method to load the model weights.
+"""
+
+ERNIE_INPUTS_DOCSTRING = r"""
+    Args:
+        input_ids (`ms.Tensor` of shape `({0})`):
+            Indices of input sequence tokens in the vocabulary.
+
+            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
+            [`PreTrainedTokenizer.__call__`] for details.
+
+            [What are input IDs?](../glossary#input-ids)
+        attention_mask (`ms.Tensor` of shape `({0})`, *optional*):
+            Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
+
+            - 1 for tokens that are **not masked**,
+            - 0 for tokens that are **masked**.
+
+            [What are attention masks?](../glossary#attention-mask)
+        token_type_ids (`ms.Tensor` of shape `({0})`, *optional*):
+            Segment token indices to indicate first and second portions of the inputs. Indices are selected in `[0,
+            1]`:
+
+            - 0 corresponds to a *sentence A* token,
+            - 1 corresponds to a *sentence B* token.
+
+            [What are token type IDs?](../glossary#token-type-ids)
+        task_type_ids (`ms.Tensor` of shape `({0})`, *optional*):
+            Task type embedding is a special embedding to represent the characteristic of different tasks, such as
+            word-aware pre-training task, structure-aware pre-training task and semantic-aware pre-training task. We
+            assign a `task_type_id` to each task and the `task_type_id` is in the range `[0,
+            config.task_type_vocab_size-1]
+        position_ids (`ms.Tensor` of shape `({0})`, *optional*):
+            Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
+            config.max_position_embeddings - 1]`.
+
+            [What are position IDs?](../glossary#position-ids)
+        head_mask (`ms.Tensor` of shape `(num_heads,)` or `(num_layers, num_heads)`, *optional*):
+            Mask to nullify selected heads of the self-attention modules. Mask values selected in `[0, 1]`:
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
+
+        inputs_embeds (`ms.Tensor` of shape `({0}, hidden_size)`, *optional*):
+            Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
+            is useful if you want more control over how to convert `input_ids` indices into associated vectors than the
+            model's internal embedding lookup matrix.
+        output_attentions (`bool`, *optional*):
+            Whether or not to return the attentions tensors of all attention layers. See `attentions` under returned
+            tensors for more detail.
+        output_hidden_states (`bool`, *optional*):
+            Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors for
+            more detail.
+        return_dict (`bool`, *optional*):
+            Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
+"""
+
+
+class ErnieModel(ErniePreTrainedModel):
     """
 
     The model can behave as an encoder (with only self-attention) as well as a decoder, in which case a layer of
@@ -807,43 +763,28 @@ class BertModel(BertPreTrainedModel):
     `add_cross_attention` set to `True`; an `encoder_hidden_states` is then expected as an input to the forward pass.
     """
 
-    _no_split_modules = ["BertEmbeddings", "BertLayer"]
-
+    # Copied from transformers.models.clap.modeling_clap.ClapTextModel.__init__ with ClapText->Ernie
     def __init__(self, config, add_pooling_layer=True):
         super().__init__(config)
         self.config = config
 
-        self.embeddings = BertEmbeddings(config)
-        self.encoder = BertEncoder(config)
+        self.embeddings = ErnieEmbeddings(config)
+        self.encoder = ErnieEncoder(config)
 
-        self.pooler = BertPooler(config) if add_pooling_layer else None
-        if self.pooler is None:
-            logger.warning(
-                "Pooler is None, not returning `pooled_output`. "
-                "Model output will be (`last_hidden_stat`, `past_key_values`, `hidden_states`, `attentions`, `cross_attentions`)"
-            )
-
-        self.attn_implementation = config._attn_implementation
-        self.position_embedding_type = config.position_embedding_type
-
-        self.output_attentions = config.output_attentions
-        self.output_hidden_states = config.output_hidden_states
-        self.use_return_dict = config.use_return_dict
-        self.is_decoder = config.is_decoder
-        self.use_cache = config.use_cache
-        self.num_hidden_layers = config.num_hidden_layers
-
-        self.token_type_ids = self.embeddings.token_type_ids if hasattr(self.embeddings, "token_type_ids") else None
+        self.pooler = ErniePooler(config) if add_pooling_layer else None
 
         # Initialize weights and apply final processing
         self.post_init()
 
+    # Copied from transformers.models.bert.modeling_bert.BertModel.get_input_embeddings
     def get_input_embeddings(self):
         return self.embeddings.word_embeddings
 
+    # Copied from transformers.models.bert.modeling_bert.BertModel.set_input_embeddings
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
+    # Copied from transformers.models.bert.modeling_bert.BertModel._prune_heads
     def _prune_heads(self, heads_to_prune):
         """
         Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
@@ -857,6 +798,7 @@ class BertModel(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
@@ -866,7 +808,7 @@ class BertModel(BertPreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[ms.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
         r"""
         encoder_hidden_states  (`ms.Tensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
@@ -878,8 +820,7 @@ class BertModel(BertPreTrainedModel):
 
             - 1 for tokens that are **not masked**,
             - 0 for tokens that are **masked**.
-        past_key_values (`tuple(tuple(ms.Tensor))` of length `config.n_layers` with each tuple having 4 tensors of shape
-            `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
+        past_key_values (`tuple(tuple(ms.Tensor))` of length `config.n_layers` with each tuple having 4 tensors of shape `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
             Contains precomputed key and value hidden states of the attention blocks. Can be used to speed up decoding.
 
             If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
@@ -889,18 +830,21 @@ class BertModel(BertPreTrainedModel):
             If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
             `past_key_values`).
         """
-        output_attentions = output_attentions if output_attentions is not None else self.output_attentions
-        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.output_hidden_states
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.is_decoder:
-            use_cache = use_cache if use_cache is not None else self.use_cache
+        if self.config.is_decoder:
+            use_cache = use_cache if use_cache is not None else self.config.use_cache
         else:
             use_cache = False
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
+            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
             input_shape = input_ids.shape
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.shape[:-1]
@@ -912,68 +856,29 @@ class BertModel(BertPreTrainedModel):
         # past_key_values_length
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
+        if attention_mask is None:
+            attention_mask = mint.ones(((batch_size, seq_length + past_key_values_length)))
+
         if token_type_ids is None:
-            if self.token_type_ids is not None:
-                buffered_token_type_ids = self.token_type_ids[:, :seq_length]
+            if hasattr(self.embeddings, "token_type_ids"):
+                buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
                 buffered_token_type_ids_expanded = buffered_token_type_ids.broadcast_to((batch_size, seq_length))
                 token_type_ids = buffered_token_type_ids_expanded
             else:
-                token_type_ids = mint.zeros(input_shape, dtype=ms.int32)
+                token_type_ids = mint.zeros(input_shape, dtype=ms.int64)
 
-        embedding_output = self.embeddings(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            token_type_ids=token_type_ids,
-            inputs_embeds=inputs_embeds,
-            past_key_values_length=past_key_values_length,
-        )
-
-        if attention_mask is None:
-            attention_mask = mint.ones((batch_size, seq_length + past_key_values_length))
-
-        use_sdpa_attention_masks = (
-            self.attn_implementation == "sdpa"
-            and self.position_embedding_type == "absolute"
-            and head_mask is None
-            and not output_attentions
-        )
-
-        # Expand the attention mask
-        if use_sdpa_attention_masks:
-            # Expand the attention mask for SDPA.
-            # [bsz, seq_len] -> [bsz, 1, seq_len, seq_len]
-            if self.is_decoder:
-                extended_attention_mask = _prepare_4d_causal_attention_mask(
-                    attention_mask,
-                    input_shape,
-                    embedding_output,
-                    past_key_values_length,
-                )
-            else:
-                extended_attention_mask = _prepare_4d_attention_mask(
-                    attention_mask, embedding_output.dtype, tgt_len=seq_length
-                )
-        else:
-            # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
-            # ourselves in which case we just need to make it broadcastable to all heads.
-            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
+        # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
+        # ourselves in which case we just need to make it broadcastable to all heads.
+        extended_attention_mask: ms.Tensor = self.get_extended_attention_mask(attention_mask, input_shape)
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
-        if self.is_decoder and encoder_hidden_states is not None:
+        if self.config.is_decoder and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.shape
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
                 encoder_attention_mask = mint.ones(encoder_hidden_shape)
-
-            if use_sdpa_attention_masks:
-                # Expand the attention mask for SDPA.
-                # [bsz, seq_len] -> [bsz, 1, seq_len, seq_len]
-                encoder_extended_attention_mask = _prepare_4d_attention_mask(
-                    encoder_attention_mask, embedding_output.dtype, tgt_len=seq_length
-                )
-            else:
-                encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
+            encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_extended_attention_mask = None
 
@@ -982,8 +887,16 @@ class BertModel(BertPreTrainedModel):
         # attention_probs has shape bsz x n_heads x N x N
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = self.get_head_mask(head_mask, self.num_hidden_layers)
+        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
+        embedding_output = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
+            inputs_embeds=inputs_embeds,
+            past_key_values_length=past_key_values_length,
+        )
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
@@ -1000,10 +913,7 @@ class BertModel(BertPreTrainedModel):
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         if not return_dict:
-            if pooled_output is not None:
-                return (sequence_output, pooled_output) + encoder_outputs[1:]
-            else:
-                return (sequence_output,) + encoder_outputs[1:]
+            return (sequence_output, pooled_output) + encoder_outputs[1:]
 
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
@@ -1015,23 +925,24 @@ class BertModel(BertPreTrainedModel):
         )
 
 
-class BertForPreTraining(BertPreTrainedModel):
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+class ErnieForPreTraining(ErniePreTrainedModel):
+    _tied_weights_keys = ["cls.predictions.decoder.bias", "cls.predictions.decoder.weight"]
 
+    # Copied from transformers.models.bert.modeling_bert.BertForPreTraining.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
 
-        self.bert = BertModel(config)
-        self.cls = BertPreTrainingHeads(config)
-        self.use_return_dict = config.use_return_dict
-        self.vocab_size = config.vocab_size
+        self.ernie = ErnieModel(config)
+        self.cls = ErniePreTrainingHeads(config)
 
         # Initialize weights and apply final processing
         self.post_init()
 
+    # Copied from transformers.models.bert.modeling_bert.BertForPreTraining.get_output_embeddings
     def get_output_embeddings(self):
         return self.cls.predictions.decoder
 
+    # Copied from transformers.models.bert.modeling_bert.BertForPreTraining.set_output_embeddings
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
         self.cls.predictions.bias = new_embeddings.bias
@@ -1041,6 +952,7 @@ class BertForPreTraining(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
@@ -1048,8 +960,8 @@ class BertForPreTraining(BertPreTrainedModel):
         next_sentence_label: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
-    ) -> Union[Tuple[ms.Tensor], BertForPreTrainingOutput]:
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple[ms.Tensor], ErnieForPreTrainingOutput]:
         r"""
             labels (`ms.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
                 Labels for computing the masked language modeling loss. Indices should be in `[-100, 0, ...,
@@ -1061,7 +973,7 @@ class BertForPreTraining(BertPreTrainedModel):
 
                 - 0 indicates sequence B is a continuation of sequence A,
                 - 1 indicates sequence B is a random sequence.
-            kwargs (`Dict[str, any]`, optional, defaults to *{}*):
+            kwargs (`Dict[str, any]`, *optional*, defaults to `{}`):
                 Used to hide legacy arguments that have been deprecated.
 
         Returns:
@@ -1069,26 +981,28 @@ class BertForPreTraining(BertPreTrainedModel):
         Example:
 
         ```python
-        >>> from transformers import AutoTokenizer, BertForPreTraining
+        >>> from transformers import AutoTokenizer
+        >>> from mindone.transformers import ErnieForPreTraining
         >>> import mindspore as ms
 
-        >>> tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
-        >>> model = BertForPreTraining.from_pretrained("google-bert/bert-base-uncased")
+        >>> tokenizer = AutoTokenizer.from_pretrained("nghuyong/ernie-1.0-base-zh", revision="refs/pr/1")
+        >>> model = ErnieForPreTraining.from_pretrained("nghuyong/ernie-1.0-base-zh", revision="refs/pr/1")
 
-        >>> inputs = tokenizer("Hello, my dog is cute")
-        >>> inputs = {k:ms.Tensor(v) for k, v in inputs.items()}
+        >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="np")
+        >>> inputs = {k: ms.tensor(v) for k, v in inputs.items()}
         >>> outputs = model(**inputs)
 
         >>> prediction_logits = outputs.prediction_logits
         >>> seq_relationship_logits = outputs.seq_relationship_logits
         ```
         """
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1102,16 +1016,16 @@ class BertForPreTraining(BertPreTrainedModel):
 
         total_loss = None
         if labels is not None and next_sentence_label is not None:
-            loss_fct = mint.nn.CrossEntropyLoss()
-            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.vocab_size), labels.view(-1).int())
-            next_sentence_loss = loss_fct(seq_relationship_score.view(-1, 2), next_sentence_label.view(-1).int())
+            loss_fct = CrossEntropyLoss()
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
+            next_sentence_loss = loss_fct(seq_relationship_score.view(-1, 2), next_sentence_label.view(-1))
             total_loss = masked_lm_loss + next_sentence_loss
 
         if not return_dict:
             output = (prediction_scores, seq_relationship_score) + outputs[2:]
             return ((total_loss,) + output) if total_loss is not None else output
 
-        return BertForPreTrainingOutput(
+        return ErnieForPreTrainingOutput(
             loss=total_loss,
             prediction_logits=prediction_scores,
             seq_relationship_logits=seq_relationship_score,
@@ -1120,25 +1034,27 @@ class BertForPreTraining(BertPreTrainedModel):
         )
 
 
-class BertLMHeadModel(BertPreTrainedModel):
+class ErnieForCausalLM(ErniePreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["cls.predictions.decoder.bias", "cls.predictions.decoder.weight"]
 
+    # Copied from transformers.models.bert.modeling_bert.BertLMHeadModel.__init__ with BertLMHeadModel->ErnieForCausalLM,Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
 
         if not config.is_decoder:
-            logger.warning("If you want to use `BertLMHeadModel` as a standalone, add `is_decoder=True.`")
+            logger.warning("If you want to use `ErnieForCausalLM` as a standalone, add `is_decoder=True.`")
 
-        self.bert = BertModel(config, add_pooling_layer=False)
-        self.cls = BertOnlyMLMHead(config)
-        self.use_return_dict = config.use_return_dict
+        self.ernie = ErnieModel(config, add_pooling_layer=False)
+        self.cls = ErnieOnlyMLMHead(config)
 
         # Initialize weights and apply final processing
         self.post_init()
 
+    # Copied from transformers.models.bert.modeling_bert.BertLMHeadModel.get_output_embeddings
     def get_output_embeddings(self):
         return self.cls.predictions.decoder
 
+    # Copied from transformers.models.bert.modeling_bert.BertLMHeadModel.set_output_embeddings
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
         self.cls.predictions.bias = new_embeddings.bias
@@ -1148,6 +1064,7 @@ class BertLMHeadModel(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
@@ -1158,7 +1075,8 @@ class BertLMHeadModel(BertPreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple[ms.Tensor], CausalLMOutputWithCrossAttentions]:
         r"""
         encoder_hidden_states  (`ms.Tensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
@@ -1174,8 +1092,7 @@ class BertLMHeadModel(BertPreTrainedModel):
             Labels for computing the left-to-right language modeling loss (next word prediction). Indices should be in
             `[-100, 0, ..., config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are
             ignored (masked), the loss is only computed for the tokens with labels n `[0, ..., config.vocab_size]`
-        past_key_values (`tuple(tuple(ms.Tensor))` of length `config.n_layers` with each tuple having 4 tensors of shape
-            `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
+        past_key_values (`tuple(tuple(ms.Tensor))` of length `config.n_layers` with each tuple having 4 tensors of shape `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
             Contains precomputed key and value hidden states of the attention blocks. Can be used to speed up decoding.
 
             If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
@@ -1185,14 +1102,15 @@ class BertLMHeadModel(BertPreTrainedModel):
             If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
             `past_key_values`).
         """
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if labels is not None:
             use_cache = False
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1210,11 +1128,12 @@ class BertLMHeadModel(BertPreTrainedModel):
 
         lm_loss = None
         if labels is not None:
-            # we are doing next-token prediction; shift prediction scores and input ids by one
-            shifted_prediction_scores = prediction_scores[:, :-1, :]
-            labels = labels[:, 1:]
-            loss_fct = mint.nn.CrossEntropyLoss()
-            lm_loss = loss_fct(shifted_prediction_scores.view(-1, self.vocab_size), labels.view(-1).int())
+            lm_loss = self.loss_function(
+                prediction_scores,
+                labels,
+                vocab_size=self.config.vocab_size,
+                **kwargs,
+            )
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]
@@ -1229,65 +1148,40 @@ class BertLMHeadModel(BertPreTrainedModel):
             cross_attentions=outputs.cross_attentions,
         )
 
-    def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, attention_mask=None, use_cache=True, **model_kwargs
-    ):
-        input_shape = input_ids.shape
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        if attention_mask is None:
-            attention_mask = input_ids.new_ones(input_shape)
-
-        # cut decoder_input_ids if past_key_values is used
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-        }
-
+    # Copied from transformers.models.bert.modeling_bert.BertLMHeadModel._reorder_cache
     def _reorder_cache(self, past_key_values, beam_idx):
         reordered_past = ()
         for layer_past in past_key_values:
-            reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
+            reordered_past += (
+                tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),
+            )
         return reordered_past
 
 
-class BertForMaskedLM(BertPreTrainedModel):
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+class ErnieForMaskedLM(ErniePreTrainedModel):
+    _tied_weights_keys = ["cls.predictions.decoder.bias", "cls.predictions.decoder.weight"]
 
+    # Copied from transformers.models.bert.modeling_bert.BertForMaskedLM.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
 
         if config.is_decoder:
             logger.warning(
-                "If you want to use `BertForMaskedLM` make sure `config.is_decoder=False` for "
+                "If you want to use `ErnieForMaskedLM` make sure `config.is_decoder=False` for "
                 "bi-directional self-attention."
             )
 
-        self.bert = BertModel(config, add_pooling_layer=False)
-        self.cls = BertOnlyMLMHead(config)
-        self.use_return_dict = config.use_return_dict
-        self.vocab_size = config.vocab_size
-        self.pad_token_id = config.pad_token_id
+        self.ernie = ErnieModel(config, add_pooling_layer=False)
+        self.cls = ErnieOnlyMLMHead(config)
 
         # Initialize weights and apply final processing
         self.post_init()
 
+    # Copied from transformers.models.bert.modeling_bert.BertForMaskedLM.get_output_embeddings
     def get_output_embeddings(self):
         return self.cls.predictions.decoder
 
+    # Copied from transformers.models.bert.modeling_bert.BertForMaskedLM.set_output_embeddings
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
         self.cls.predictions.bias = new_embeddings.bias
@@ -1297,6 +1191,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
@@ -1305,7 +1200,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         labels: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[ms.Tensor], MaskedLMOutput]:
         r"""
         labels (`ms.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -1314,12 +1209,13 @@ class BertForMaskedLM(BertPreTrainedModel):
             loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`
         """
 
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1335,8 +1231,8 @@ class BertForMaskedLM(BertPreTrainedModel):
 
         masked_lm_loss = None
         if labels is not None:
-            loss_fct = mint.nn.CrossEntropyLoss()  # -100 index = padding token
-            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.vocab_size), labels.view(-1).int())
+            loss_fct = CrossEntropyLoss()  # -100 index = padding token
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]
@@ -1349,28 +1245,37 @@ class BertForMaskedLM(BertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+    # Copied from transformers.models.bert.modeling_bert.BertForMaskedLM.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, attention_mask=None, **model_kwargs):
         input_shape = input_ids.shape
         effective_batch_size = input_shape[0]
 
         #  add a dummy token
-        if self.pad_token_id is None:
+        if self.config.pad_token_id is None:
             raise ValueError("The PAD token should be defined for generation")
 
         attention_mask = mint.cat([attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))], dim=-1)
-        dummy_token = mint.full((effective_batch_size, 1), self.pad_token_id, dtype=ms.int32)
+        dummy_token = mint.full((effective_batch_size, 1), self.config.pad_token_id, dtype=ms.int64)
         input_ids = mint.cat([input_ids, dummy_token], dim=1)
 
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
+    @classmethod
+    def can_generate(cls) -> bool:
+        """
+        Legacy correction: ErnieForMaskedLM can't call `generate()` from GenerationMixin.
+        Remove after v4.50, when we stop making `PreTrainedModel` inherit from `GenerationMixin`.
+        """
+        return False
 
-class BertForNextSentencePrediction(BertPreTrainedModel):
+
+class ErnieForNextSentencePrediction(ErniePreTrainedModel):
+    # Copied from transformers.models.bert.modeling_bert.BertForNextSentencePrediction.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
 
-        self.bert = BertModel(config)
-        self.cls = BertOnlyNSPHead(config)
-        self.use_return_dict = config.use_return_dict
+        self.ernie = ErnieModel(config)
+        self.cls = ErnieOnlyNSPHead(config)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1380,13 +1285,14 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
         labels: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
         **kwargs,
     ) -> Union[Tuple[ms.Tensor], NextSentencePredictorOutput]:
         r"""
@@ -1402,17 +1308,19 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         Example:
 
         ```python
-        >>> from transformers import AutoTokenizer, BertForNextSentencePrediction
+        >>> from transformers import AutoTokenizer
+        >>> from mindone.transformers import ErnieForNextSentencePrediction
         >>> import mindspore as ms
 
-        >>> tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
-        >>> model = BertForNextSentencePrediction.from_pretrained("google-bert/bert-base-uncased")
+        >>> tokenizer = AutoTokenizer.from_pretrained("nghuyong/ernie-1.0-base-zh", revision="refs/pr/1")
+        >>> model = ErnieForNextSentencePrediction.from_pretrained("nghuyong/ernie-1.0-base-zh", revision="refs/pr/1")
 
         >>> prompt = "In Italy, pizza served in formal settings, such as at a restaurant, is presented unsliced."
         >>> next_sentence = "The sky is blue due to the shorter wavelength of blue light."
-        >>> encoding = tokenizer(prompt, next_sentence)
+        >>> encoding = tokenizer(prompt, next_sentence, return_tensors="np")
+        >>> encoding = {k: ms.tensor(v) for k, v in encoding.items()}
 
-        >>> outputs = model(**encoding, labels=ms.Tensor([1]))
+        >>> outputs = model(**encoding, labels=ms.tensor([1], dtype=ms.int64))
         >>> logits = outputs.logits
         >>> assert logits[0, 0] < logits[0, 1]  # next sentence was random
         ```
@@ -1426,12 +1334,13 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
             )
             labels = kwargs.pop("next_sentence_label")
 
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1446,8 +1355,8 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
 
         next_sentence_loss = None
         if labels is not None:
-            loss_fct = mint.nn.CrossEntropyLoss()
-            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1).int())
+            loss_fct = CrossEntropyLoss()
+            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1))
 
         if not return_dict:
             output = (seq_relationship_scores,) + outputs[2:]
@@ -1461,19 +1370,18 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         )
 
 
-class BertForSequenceClassification(BertPreTrainedModel):
+class ErnieForSequenceClassification(ErniePreTrainedModel):
+    # Copied from transformers.models.bert.modeling_bert.BertForSequenceClassification.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
-        self.use_return_dict = config.use_return_dict
-        self.problem_type = config.problem_type
 
-        self.bert = BertModel(config)
+        self.ernie = ErnieModel(config)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
-        self.dropout = mint.nn.Dropout(p=classifier_dropout)
+        self.dropout = mint.nn.Dropout(classifier_dropout)
         self.classifier = mint.nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
@@ -1484,13 +1392,14 @@ class BertForSequenceClassification(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
         labels: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[ms.Tensor], SequenceClassifierOutput]:
         r"""
         labels (`ms.Tensor` of shape `(batch_size,)`, *optional*):
@@ -1498,12 +1407,13 @@ class BertForSequenceClassification(BertPreTrainedModel):
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1519,29 +1429,26 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         loss = None
         if labels is not None:
-            if self.problem_type is None:
+            if self.config.problem_type is None:
                 if self.num_labels == 1:
-                    problem_type = "regression"
+                    self.config.problem_type = "regression"
                 elif self.num_labels > 1 and (labels.dtype == ms.int64 or labels.dtype == ms.int32):
-                    problem_type = "single_label_classification"
+                    self.config.problem_type = "single_label_classification"
                 else:
-                    problem_type = "multi_label_classification"
-            else:
-                problem_type = self.problem_type
+                    self.config.problem_type = "multi_label_classification"
 
-            if problem_type == "regression":
-                loss_fct = mint.nn.MSELoss()
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
                 if self.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
-            elif problem_type == "single_label_classification":
-                loss_fct = mint.nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1).int())
-            elif problem_type == "multi_label_classification":
-                loss_fct = mint.nn.BCEWithLogitsLoss()
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
-
         if not return_dict:
             output = (logits,) + outputs[2:]
             return ((loss,) + output) if loss is not None else output
@@ -1554,17 +1461,17 @@ class BertForSequenceClassification(BertPreTrainedModel):
         )
 
 
-class BertForMultipleChoice(BertPreTrainedModel):
+class ErnieForMultipleChoice(ErniePreTrainedModel):
+    # Copied from transformers.models.bert.modeling_bert.BertForMultipleChoice.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
 
-        self.bert = BertModel(config)
+        self.ernie = ErnieModel(config)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
-        self.dropout = mint.nn.Dropout(p=classifier_dropout)
+        self.dropout = mint.nn.Dropout(classifier_dropout)
         self.classifier = mint.nn.Linear(config.hidden_size, 1)
-        self.use_return_dict = config.use_return_dict
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1574,13 +1481,14 @@ class BertForMultipleChoice(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
         labels: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[ms.Tensor], MultipleChoiceModelOutput]:
         r"""
         labels (`ms.Tensor` of shape `(batch_size,)`, *optional*):
@@ -1588,7 +1496,7 @@ class BertForMultipleChoice(BertPreTrainedModel):
             num_choices-1]` where `num_choices` is the size of the second dimension of the input tensors. (See
             `input_ids` above)
         """
-        return_dict = return_dict if return_dict is not None else self.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         num_choices = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
 
         input_ids = input_ids.view(-1, input_ids.shape[-1]) if input_ids is not None else None
@@ -1601,10 +1509,11 @@ class BertForMultipleChoice(BertPreTrainedModel):
             else None
         )
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1621,8 +1530,8 @@ class BertForMultipleChoice(BertPreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss_fct = mint.nn.CrossEntropyLoss()
-            loss = loss_fct(reshaped_logits, labels.int())
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(reshaped_logits, labels)
 
         if not return_dict:
             output = (reshaped_logits,) + outputs[2:]
@@ -1636,18 +1545,18 @@ class BertForMultipleChoice(BertPreTrainedModel):
         )
 
 
-class BertForTokenClassification(BertPreTrainedModel):
+class ErnieForTokenClassification(ErniePreTrainedModel):
+    # Copied from transformers.models.bert.modeling_bert.BertForTokenClassification.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.bert = BertModel(config, add_pooling_layer=False)
+        self.ernie = ErnieModel(config, add_pooling_layer=False)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
-        self.dropout = mint.nn.Dropout(p=classifier_dropout)
+        self.dropout = mint.nn.Dropout(classifier_dropout)
         self.classifier = mint.nn.Linear(config.hidden_size, config.num_labels)
-        self.use_return_dict = config.use_return_dict
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1657,13 +1566,14 @@ class BertForTokenClassification(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
         labels: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[ms.Tensor], TokenClassifierOutput]:
         r"""
         labels (`ms.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -1671,10 +1581,11 @@ class BertForTokenClassification(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1690,8 +1601,8 @@ class BertForTokenClassification(BertPreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss_fct = mint.nn.CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1).int())
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
         if not return_dict:
             output = (logits,) + outputs[2:]
@@ -1705,12 +1616,13 @@ class BertForTokenClassification(BertPreTrainedModel):
         )
 
 
-class BertForQuestionAnswering(BertPreTrainedModel):
+class ErnieForQuestionAnswering(ErniePreTrainedModel):
+    # Copied from transformers.models.bert.modeling_bert.BertForQuestionAnswering.__init__ with Bert->Ernie,bert->ernie
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.bert = BertModel(config, add_pooling_layer=False)
+        self.ernie = ErnieModel(config, add_pooling_layer=False)
         self.qa_outputs = mint.nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
@@ -1721,6 +1633,7 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         input_ids: Optional[ms.Tensor] = None,
         attention_mask: Optional[ms.Tensor] = None,
         token_type_ids: Optional[ms.Tensor] = None,
+        task_type_ids: Optional[ms.Tensor] = None,
         position_ids: Optional[ms.Tensor] = None,
         head_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
@@ -1728,7 +1641,7 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         end_positions: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[ms.Tensor], QuestionAnsweringModelOutput]:
         r"""
         start_positions (`ms.Tensor` of shape `(batch_size,)`, *optional*):
@@ -1742,10 +1655,11 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.ernie(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            task_type_ids=task_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1758,8 +1672,8 @@ class BertForQuestionAnswering(BertPreTrainedModel):
 
         logits = self.qa_outputs(sequence_output)
         start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1)
-        end_logits = end_logits.squeeze(-1)
+        start_logits = start_logits.squeeze(-1).contiguous()
+        end_logits = end_logits.squeeze(-1).contiguous()
 
         total_loss = None
         if start_positions is not None and end_positions is not None:
@@ -1773,9 +1687,9 @@ class BertForQuestionAnswering(BertPreTrainedModel):
             start_positions = start_positions.clamp(0, ignored_index)
             end_positions = end_positions.clamp(0, ignored_index)
 
-            loss_fct = mint.nn.CrossEntropyLoss(ignore_index=ignored_index)
-            start_loss = loss_fct(start_logits, start_positions.int())
-            end_loss = loss_fct(end_logits, end_positions.int())
+            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            start_loss = loss_fct(start_logits, start_positions)
+            end_loss = loss_fct(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
 
         if not return_dict:
@@ -1791,24 +1705,15 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         )
 
 
-def scaled_dot_product_attention(query, key, value, attn_mask=None, dtype=None):
-    # force fp16 precision calculation
-    _dtype = query.dtype
-    if dtype is not None:
-        query, key, value = query.astype(dtype), key.astype(dtype), value.astype(dtype)
-
-    if attn_mask is not None:
-        attn_mask = attn_mask.masked_fill(not attn_mask, -1e5) if attn_mask.dtype == ms.bool_ else attn_mask
-        attn_weight = mint.softmax(
-            ops.cast(mint.matmul(query, key.swapaxes(-2, -1)) / (query.shape[-1] ** 0.5) + attn_mask, ms.float32),
-            dim=-1,
-        ).astype(_dtype)
-    else:
-        attn_weight = mint.softmax(
-            ops.cast(mint.matmul(query, key.swapaxes(-2, -1)) / (query.shape[-1] ** 0.5), ms.float32), dim=-1
-        ).astype(_dtype)
-
-    out = ops.matmul(attn_weight, value)
-    out = out.astype(_dtype)
-
-    return out
+__all__ = [
+    "ErnieForCausalLM",
+    "ErnieForMaskedLM",
+    "ErnieForMultipleChoice",
+    "ErnieForNextSentencePrediction",
+    "ErnieForPreTraining",
+    "ErnieForQuestionAnswering",
+    "ErnieForSequenceClassification",
+    "ErnieForTokenClassification",
+    "ErnieModel",
+    "ErniePreTrainedModel",
+]
