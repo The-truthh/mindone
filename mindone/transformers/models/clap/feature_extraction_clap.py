@@ -24,7 +24,7 @@ import numpy as np
 from transformers.utils import logging
 
 import mindspore as ms
-from mindspore import ops
+from mindspore import mint
 
 from ...audio_utils import mel_filter_bank, spectrogram, window_function
 from ...feature_extraction_sequence_utils import SequenceFeatureExtractor
@@ -194,7 +194,9 @@ class ClapFeatureExtractor(SequenceFeatureExtractor):
         mel_chunk_back = mel[idx_back : idx_back + chunk_frames, :]
 
         mel = ms.Tensor(mel[None, None, :])
-        mel_shrink = ops.interpolate(mel, size=[chunk_frames, 64], mode="bilinear", align_corners=False)
+        mel_shrink = mint.nn.functional.interpolate(
+            mel, size=[chunk_frames, 64], mode="bilinear", align_corners=False
+        )
         mel_shrink = mel_shrink[0][0].numpy()
         mel_fusion = np.stack([mel_shrink, mel_chunk_front, mel_chunk_middle, mel_chunk_back], axis=0)
         return mel_fusion

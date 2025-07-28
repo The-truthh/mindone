@@ -33,7 +33,7 @@ from transformers.utils import (
 )
 
 import mindspore as ms
-from mindspore import mint, nn, ops
+from mindspore import mint, nn
 from mindspore.common.initializer import Normal, initializer
 from mindspore.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
@@ -268,7 +268,7 @@ class BartAttention(nn.Cell):
         else:
             attn_weights_reshaped = None
 
-        attn_probs = ops.dropout(attn_weights, p=self.dropout, training=self.training)
+        attn_probs = mint.nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
         attn_output = mint.bmm(attn_probs, value_states)
 
@@ -488,21 +488,21 @@ class BartEncoderLayer(nn.Cell):
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
         )
-        hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
 
         residual = hidden_states
         hidden_states = self.activation_fn(self.fc1(hidden_states))
-        hidden_states = ops.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
         hidden_states = self.fc2(hidden_states)
-        hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
 
-        if hidden_states.dtype == ms.float16 and (ops.isinf(hidden_states).any() or ops.isnan(hidden_states).any()):
+        if hidden_states.dtype == ms.float16 and (mint.isinf(hidden_states).any() or mint.isnan(hidden_states).any()):
             clamp_value = np.finfo(np.float16).max - 1000
-            hidden_states = ops.clamp(hidden_states, min=-clamp_value, max=clamp_value)
+            hidden_states = mint.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
         outputs = (hidden_states,)
 
@@ -585,7 +585,7 @@ class BartDecoderLayer(nn.Cell):
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
         )
-        hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
 
@@ -605,7 +605,7 @@ class BartDecoderLayer(nn.Cell):
                 past_key_value=cross_attn_past_key_value,
                 output_attentions=output_attentions,
             )
-            hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
             hidden_states = residual + hidden_states
             hidden_states = self.encoder_attn_layer_norm(hidden_states)
 
@@ -615,9 +615,9 @@ class BartDecoderLayer(nn.Cell):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.activation_fn(self.fc1(hidden_states))
-        hidden_states = ops.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
         hidden_states = self.fc2(hidden_states)
-        hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
 
@@ -644,7 +644,7 @@ class BartClassificationHead(nn.Cell):
     ):
         super().__init__()
         self.dense = mint.nn.Linear(input_dim, inner_dim)
-        self.dropout = nn.Dropout(p=pooler_dropout)
+        self.dropout = mint.nn.Dropout(p=pooler_dropout)
         self.out_proj = mint.nn.Linear(inner_dim, num_classes)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
@@ -963,7 +963,7 @@ class BartEncoder(BartPreTrainedModel):
 
         hidden_states = inputs_embeds + embed_pos
         hidden_states = self.layernorm_embedding(hidden_states)
-        hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         # expand attention_mask
         if attention_mask is not None:
@@ -1217,7 +1217,7 @@ class BartDecoder(BartPreTrainedModel):
         hidden_states = inputs_embeds + positions
         hidden_states = self.layernorm_embedding(hidden_states)
 
-        hidden_states = ops.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = mint.nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -1672,7 +1672,7 @@ class BartForSequenceClassification(BartPreTrainedModel):
 
         eos_mask = input_ids.eq(self.config.eos_token_id)
 
-        if len(ops.unique_consecutive(eos_mask.sum(1))) > 1:
+        if len(mint.unique_consecutive(eos_mask.sum(1))) > 1:
             raise ValueError("All examples must have the same number of <eos> tokens.")
         sentence_representation = hidden_states[eos_mask, :].view(hidden_states.shape[0], -1, hidden_states.shape[-1])[
             :, -1, :

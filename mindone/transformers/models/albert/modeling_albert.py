@@ -26,7 +26,7 @@ from transformers.models.albert.configuration_albert import AlbertConfig
 from transformers.utils import ModelOutput, logging
 
 import mindspore as ms
-from mindspore import nn, ops
+from mindspore import mint, nn, ops
 from mindspore.common.initializer import Normal, One, Zero, initializer
 
 from ...activations import ACT2FN
@@ -56,18 +56,20 @@ class AlbertEmbeddings(nn.Cell):
 
     def __init__(self, config: AlbertConfig):
         super().__init__()
-        self.word_embeddings = nn.Embedding(config.vocab_size, config.embedding_size, padding_idx=config.pad_token_id)
-        self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.embedding_size)
-        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.embedding_size)
+        self.word_embeddings = mint.nn.Embedding(
+            config.vocab_size, config.embedding_size, padding_idx=config.pad_token_id
+        )
+        self.position_embeddings = mint.nn.Embedding(config.max_position_embeddings, config.embedding_size)
+        self.token_type_embeddings = mint.nn.Embedding(config.type_vocab_size, config.embedding_size)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = nn.LayerNorm((config.embedding_size,), epsilon=config.layer_norm_eps)
-        self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
+        self.LayerNorm = mint.nn.LayerNorm(config.embedding_size, eps=config.layer_norm_eps)
+        self.dropout = mint.nn.Dropout(p=config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
-        self.position_ids = ops.arange(config.max_position_embeddings).broadcast_to((1, -1))
-        self.token_type_ids = ops.zeros(self.position_ids.shape, dtype=ms.int32)
+        self.position_ids = mint.arange(config.max_position_embeddings).broadcast_to((1, -1))
+        self.token_type_ids = mint.zeros(self.position_ids.shape, dtype=ms.int32)
 
     def construct(
         self,
@@ -96,7 +98,7 @@ class AlbertEmbeddings(nn.Cell):
                 buffered_token_type_ids_expanded = buffered_token_type_ids.broadcast_to((input_shape[0], seq_length))
                 token_type_ids = buffered_token_type_ids_expanded
             else:
-                token_type_ids = ops.zeros(input_shape, dtype=ms.int32)
+                token_type_ids = mint.zeros(input_shape, dtype=ms.int32)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids.int())
@@ -124,20 +126,22 @@ class AlbertAttention(nn.Cell):
         self.attention_head_size = config.hidden_size // config.num_attention_heads
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = nn.Dense(config.hidden_size, self.all_head_size)
-        self.key = nn.Dense(config.hidden_size, self.all_head_size)
-        self.value = nn.Dense(config.hidden_size, self.all_head_size)
+        self.query = mint.nn.Linear(config.hidden_size, self.all_head_size)
+        self.key = mint.nn.Linear(config.hidden_size, self.all_head_size)
+        self.value = mint.nn.Linear(config.hidden_size, self.all_head_size)
 
-        self.attention_dropout = nn.Dropout(p=config.attention_probs_dropout_prob)
-        self.output_dropout = nn.Dropout(p=config.hidden_dropout_prob)
-        self.dense = nn.Dense(config.hidden_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm((config.hidden_size,), epsilon=config.layer_norm_eps)
+        self.attention_dropout = mint.nn.Dropout(p=config.attention_probs_dropout_prob)
+        self.output_dropout = mint.nn.Dropout(p=config.hidden_dropout_prob)
+        self.dense = mint.nn.Linear(config.hidden_size, config.hidden_size)
+        self.LayerNorm = mint.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.pruned_heads = set()
 
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             self.max_position_embeddings = config.max_position_embeddings
-            self.distance_embedding = nn.Embedding(2 * config.max_position_embeddings - 1, self.attention_head_size)
+            self.distance_embedding = mint.nn.Embedding(
+                2 * config.max_position_embeddings - 1, self.attention_head_size
+            )
 
     # Copied from transformers.models.bert.modeling_bert.BertSelfAttention.transpose_for_scores
     def transpose_for_scores(self, x: ms.Tensor) -> ms.Tensor:
@@ -179,8 +183,8 @@ class AlbertAttention(nn.Cell):
         value_layer = self.transpose_for_scores(mixed_value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = ops.matmul(query_layer, key_layer.swapaxes(-1, -2))
-        attention_scores = attention_scores / ops.sqrt(
+        attention_scores = mint.matmul(query_layer, key_layer.swapaxes(-1, -2))
+        attention_scores = attention_scores / mint.sqrt(
             ms.tensor(self.attention_head_size, dtype=attention_scores.dtype)
         )
 
@@ -190,21 +194,21 @@ class AlbertAttention(nn.Cell):
 
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             seq_length = hidden_states.shape[1]
-            position_ids_l = ops.arange(seq_length, dtype=ms.int64).view((-1, 1))
-            position_ids_r = ops.arange(seq_length, dtype=ms.int64).view((1, -1))
+            position_ids_l = mint.arange(seq_length, dtype=ms.int64).view((-1, 1))
+            position_ids_r = mint.arange(seq_length, dtype=ms.int64).view((1, -1))
             distance = position_ids_l - position_ids_r
             positional_embedding = self.distance_embedding(distance + self.max_position_embeddings - 1)
             positional_embedding = positional_embedding.to(dtype=query_layer.dtype)  # fp16 compatibility
 
             if self.position_embedding_type == "relative_key":
-                relative_position_scores = ops.matmul(
+                relative_position_scores = mint.matmul(
                     query_layer.unsqueeze(3), positional_embedding.permute(0, 2, 1)
                 ).squeeze(
                     3
                 )  # "bhld,lrd->bhlr"
                 attention_scores = attention_scores + relative_position_scores
             elif self.position_embedding_type == "relative_key_query":
-                relative_position_scores_query = ops.matmul(
+                relative_position_scores_query = mint.matmul(
                     query_layer.unsqueeze(3), positional_embedding.permute(0, 2, 1)
                 ).squeeze(
                     3
@@ -217,7 +221,7 @@ class AlbertAttention(nn.Cell):
                 attention_scores = attention_scores + relative_position_scores_query + relative_position_scores_key
 
         # Normalize the attention scores to probabilities.
-        attention_probs = ops.softmax(attention_scores, axis=-1)
+        attention_probs = mint.softmax(attention_scores, dim=-1)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -227,7 +231,7 @@ class AlbertAttention(nn.Cell):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        context_layer = ops.matmul(attention_probs, value_layer)
+        context_layer = mint.matmul(attention_probs, value_layer)
         context_layer = context_layer.permute(0, 2, 1, 3).flatten(2)
 
         projected_context_layer = self.dense(context_layer)
@@ -291,12 +295,12 @@ class AlbertLayer(nn.Cell):
         self.config = config
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.full_layer_layer_norm = nn.LayerNorm((config.hidden_size,), epsilon=config.layer_norm_eps)
+        self.full_layer_layer_norm = mint.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.attention = ALBERT_ATTENTION_CLASSES[config._attn_implementation](config)
-        self.ffn = nn.Dense(config.hidden_size, config.intermediate_size)
-        self.ffn_output = nn.Dense(config.intermediate_size, config.hidden_size)
+        self.ffn = mint.nn.Linear(config.hidden_size, config.intermediate_size)
+        self.ffn_output = mint.nn.Linear(config.intermediate_size, config.hidden_size)
         self.activation = ACT2FN[config.hidden_act]
-        self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
+        self.dropout = mint.nn.Dropout(p=config.hidden_dropout_prob)
 
     def construct(
         self,
@@ -365,7 +369,7 @@ class AlbertTransformer(nn.Cell):
         super().__init__()
 
         self.config = config
-        self.embedding_hidden_mapping_in = nn.Dense(config.embedding_size, config.hidden_size)
+        self.embedding_hidden_mapping_in = mint.nn.Linear(config.embedding_size, config.hidden_size)
         self.albert_layer_groups = nn.CellList([AlbertLayerGroup(config) for _ in range(config.num_hidden_groups)])
 
     def construct(
@@ -426,7 +430,7 @@ class AlbertPreTrainedModel(MSPreTrainedModel):
 
     def _init_weights(self, module):
         """Initialize the weights"""
-        if isinstance(module, nn.Dense):
+        if isinstance(module, mint.nn.Linear):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
             module.weight.set_data(
@@ -436,7 +440,7 @@ class AlbertPreTrainedModel(MSPreTrainedModel):
             )
             if module.bias is not None:
                 module.bias.set_data(initializer(Zero(), module.bias.shape, module.bias.dtype))
-        elif isinstance(module, nn.Embedding):
+        elif isinstance(module, mint.nn.Embedding):
             module.embedding_table.set_data(
                 initializer(
                     Normal(sigma=self.config.initializer_range, mean=0.0),
@@ -446,7 +450,7 @@ class AlbertPreTrainedModel(MSPreTrainedModel):
             )
             if module.padding_idx is not None:
                 module.embedding_table[module.padding_idx] = 0
-        elif isinstance(module, LayerNorm):
+        elif isinstance(module, mint.nn.LayerNorm):
             module.bias.set_data(initializer(Zero(), module.bias.shape, module.bias.dtype))
             module.weight.set_data(initializer(One(), module.weight.shape, module.weight.dtype))
 
@@ -494,8 +498,8 @@ class AlbertModel(AlbertPreTrainedModel):
         self.encoder = AlbertTransformer(config)
 
         if add_pooling_layer:
-            self.pooler = nn.Dense(config.hidden_size, config.hidden_size)
-            self.pooler_activation = nn.Tanh()
+            self.pooler = mint.nn.Linear(config.hidden_size, config.hidden_size)
+            self.pooler_activation = mint.nn.Tanh()
         else:
             self.pooler = None
             self.pooler_activation = None
@@ -518,7 +522,7 @@ class AlbertModel(AlbertPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def get_input_embeddings(self) -> nn.Embedding:
+    def get_input_embeddings(self) -> mint.nn.Embedding:
         return self.embeddings.word_embeddings
 
     def set_input_embeddings(self, value) -> None:
@@ -568,14 +572,14 @@ class AlbertModel(AlbertPreTrainedModel):
 
         batch_size, seq_length = input_shape
         if attention_mask is None:
-            attention_mask = ops.ones(input_shape)
+            attention_mask = mint.ones(input_shape)
         if token_type_ids is None:
             if self.token_type_ids is not None:
                 buffered_token_type_ids = self.token_type_ids[:, :seq_length]
                 buffered_token_type_ids_expanded = buffered_token_type_ids.broadcast_to((batch_size, seq_length))
                 token_type_ids = buffered_token_type_ids_expanded
             else:
-                token_type_ids = ops.zeros(input_shape, dtype=ms.int32)
+                token_type_ids = mint.zeros(input_shape, dtype=ms.int32)
 
         embedding_output = self.embeddings(
             input_ids=input_ids,
@@ -643,13 +647,13 @@ class AlbertForPreTraining(AlbertPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def get_output_embeddings(self) -> nn.Dense:
+    def get_output_embeddings(self) -> mint.nn.Linear:
         return self.predictions.decoder
 
-    def set_output_embeddings(self, new_embeddings: nn.Dense) -> None:
+    def set_output_embeddings(self, new_embeddings: mint.nn.Linear) -> None:
         self.predictions.decoder = new_embeddings
 
-    def get_input_embeddings(self) -> nn.Embedding:
+    def get_input_embeddings(self) -> mint.nn.Embedding:
         return self.albert.embeddings.word_embeddings
 
     def construct(
@@ -716,7 +720,7 @@ class AlbertForPreTraining(AlbertPreTrainedModel):
 
         total_loss = None
         if labels is not None and sentence_order_label is not None:
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = mint.nn.CrossEntropyLoss()
             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.vocab_size), labels.view(-1).int())
             sentence_order_loss = loss_fct(sop_scores.view(-1, 2), sentence_order_label.view(-1).int())
             total_loss = masked_lm_loss + sentence_order_loss
@@ -738,10 +742,10 @@ class AlbertMLMHead(nn.Cell):
     def __init__(self, config: AlbertConfig):
         super().__init__()
 
-        self.LayerNorm = nn.LayerNorm((config.embedding_size,), epsilon=config.layer_norm_eps)
-        self.bias = ms.Parameter(ops.zeros(config.vocab_size), name="bias")
-        self.dense = nn.Dense(config.hidden_size, config.embedding_size)
-        self.decoder = nn.Dense(config.embedding_size, config.vocab_size)
+        self.LayerNorm = mint.nn.LayerNorm(config.embedding_size, eps=config.layer_norm_eps)
+        self.bias = ms.Parameter(mint.zeros(config.vocab_size), name="bias")
+        self.dense = mint.nn.Linear(config.hidden_size, config.embedding_size)
+        self.decoder = mint.nn.Linear(config.embedding_size, config.vocab_size)
         self.activation = ACT2FN[config.hidden_act]
         self.decoder.bias = self.bias
 
@@ -763,8 +767,8 @@ class AlbertSOPHead(nn.Cell):
     def __init__(self, config: AlbertConfig):
         super().__init__()
 
-        self.dropout = nn.Dropout(p=config.classifier_dropout_prob)
-        self.classifier = nn.Dense(config.hidden_size, config.num_labels)
+        self.dropout = mint.nn.Dropout(p=config.classifier_dropout_prob)
+        self.classifier = mint.nn.Linear(config.hidden_size, config.num_labels)
 
     def construct(self, pooled_output: ms.Tensor) -> ms.Tensor:
         dropout_pooled_output = self.dropout(pooled_output)
@@ -787,14 +791,14 @@ class AlbertForMaskedLM(AlbertPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def get_output_embeddings(self) -> nn.Dense:
+    def get_output_embeddings(self) -> mint.nn.Linear:
         return self.predictions.decoder
 
     def set_output_embeddings(self, new_embeddings) -> None:
         self.predictions.decoder = new_embeddings
         self.predictions.bias = new_embeddings.bias
 
-    def get_input_embeddings(self) -> nn.Embedding:
+    def get_input_embeddings(self) -> mint.nn.Embedding:
         return self.albert.embeddings.word_embeddings
 
     def construct(
@@ -834,7 +838,7 @@ class AlbertForMaskedLM(AlbertPreTrainedModel):
 
         >>> # retrieve index of [MASK]
         >>> mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0]
-        >>> predicted_token_id = logits[0, mask_token_index].argmax(axis=-1)
+        >>> predicted_token_id = logits[0, mask_token_index].argmax(dim=-1)
         >>> tokenizer.decode(predicted_token_id)
         'france'
         ```
@@ -867,7 +871,7 @@ class AlbertForMaskedLM(AlbertPreTrainedModel):
 
         masked_lm_loss = None
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = mint.nn.CrossEntropyLoss()
             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.vocab_size), labels.view(-1).int())
 
         if not return_dict:
@@ -891,8 +895,8 @@ class AlbertForSequenceClassification(AlbertPreTrainedModel):
         self.problem_type = config.problem_type
 
         self.albert = AlbertModel(config)
-        self.dropout = nn.Dropout(p=config.classifier_dropout_prob)
-        self.classifier = nn.Dense(config.hidden_size, config.num_labels)
+        self.dropout = mint.nn.Dropout(p=config.classifier_dropout_prob)
+        self.classifier = mint.nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -948,16 +952,16 @@ class AlbertForSequenceClassification(AlbertPreTrainedModel):
                 problem_type = self.problem_type
 
             if problem_type == "regression":
-                loss_fct = nn.MSELoss()
+                loss_fct = mint.nn.MSELoss()
                 if self.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
             elif problem_type == "single_label_classification":
-                loss_fct = nn.CrossEntropyLoss()
+                loss_fct = mint.nn.CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1).int())
             elif problem_type == "multi_label_classification":
-                loss_fct = nn.BCEWithLogitsLoss()
+                loss_fct = mint.nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
 
         if not return_dict:
@@ -981,8 +985,8 @@ class AlbertForTokenClassification(AlbertPreTrainedModel):
         classifier_dropout_prob = (
             config.classifier_dropout_prob if config.classifier_dropout_prob is not None else config.hidden_dropout_prob
         )
-        self.dropout = nn.Dropout(p=classifier_dropout_prob)
-        self.classifier = nn.Dense(config.hidden_size, self.config.num_labels)
+        self.dropout = mint.nn.Dropout(p=classifier_dropout_prob)
+        self.classifier = mint.nn.Linear(config.hidden_size, self.config.num_labels)
         self.use_return_dict = config.use_return_dict
 
         # Initialize weights and apply final processing
@@ -1026,7 +1030,7 @@ class AlbertForTokenClassification(AlbertPreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = mint.nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1).int())
 
         if not return_dict:
@@ -1047,7 +1051,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         self.num_labels = config.num_labels
 
         self.albert = AlbertModel(config, add_pooling_layer=False)
-        self.qa_outputs = nn.Dense(config.hidden_size, config.num_labels)
+        self.qa_outputs = mint.nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1093,7 +1097,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         sequence_output = outputs[0]
 
         logits = self.qa_outputs(sequence_output)
-        start_logits, end_logits = logits.split(1, axis=-1)
+        start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
 
@@ -1109,7 +1113,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
             start_positions = start_positions.clamp(0, ignored_index)
             end_positions = end_positions.clamp(0, ignored_index)
 
-            loss_fct = nn.CrossEntropyLoss(ignore_index=ignored_index)
+            loss_fct = mint.nn.CrossEntropyLoss(ignore_index=ignored_index)
             start_loss = loss_fct(start_logits, start_positions.int())
             end_loss = loss_fct(end_logits, end_positions.int())
             total_loss = (start_loss + end_loss) / 2
@@ -1132,8 +1136,8 @@ class AlbertForMultipleChoice(AlbertPreTrainedModel):
         super().__init__(config)
 
         self.albert = AlbertModel(config)
-        self.dropout = nn.Dropout(p=config.classifier_dropout_prob)
-        self.classifier = nn.Dense(config.hidden_size, 1)
+        self.dropout = mint.nn.Dropout(p=config.classifier_dropout_prob)
+        self.classifier = mint.nn.Linear(config.hidden_size, 1)
         self.use_return_dict = config.use_return_dict
 
         # Initialize weights and apply final processing
@@ -1191,7 +1195,7 @@ class AlbertForMultipleChoice(AlbertPreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = mint.nn.CrossEntropyLoss()
             loss = loss_fct(reshaped_logits, labels.int())
 
         if not return_dict:
@@ -1206,109 +1210,6 @@ class AlbertForMultipleChoice(AlbertPreTrainedModel):
         )
 
 
-class LayerNorm(nn.Cell):
-    r"""Applies Layer Normalization over a mini-batch of inputs.
-
-    This layer implements the operation as described in
-    the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
-
-    .. math::
-        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
-
-    The mean and standard-deviation are calculated over the last `D` dimensions, where `D`
-    is the dimension of :attr:`normalized_shape`. For example, if :attr:`normalized_shape`
-    is ``(3, 5)`` (a 2-dimensional shape), the mean and standard-deviation are computed over
-    the last 2 dimensions of the input (i.e. ``input.mean((-2, -1))``).
-    :math:`\gamma` and :math:`\beta` are learnable affine transform parameters of
-    :attr:`normalized_shape` if :attr:`elementwise_affine` is ``True``.
-    The standard-deviation is calculated via the biased estimator, equivalent to
-    `ops.var(input, unbiased=False)`.
-
-    .. note::
-        Unlike Batch Normalization and Instance Normalization, which applies
-        scalar scale and bias for each entire channel/plane with the
-        :attr:`affine` option, Layer Normalization applies per-element scale and
-        bias with :attr:`elementwise_affine`.
-
-    This layer uses statistics computed from input data in both training and
-    evaluation modes.
-
-    Args:
-        normalized_shape (int or list): input shape from an expected input
-            of size
-
-            .. math::
-                [* \times \text{normalized\_shape}[0] \times \text{normalized\_shape}[1]
-                    \times \ldots \times \text{normalized\_shape}[-1]]
-
-            If a single integer is used, it is treated as a singleton list, and this module will
-            normalize over the last dimension which is expected to be of that specific size.
-        eps: a value added to the denominator for numerical stability. Default: 1e-5
-        elementwise_affine: a boolean value that when set to ``True``, this module
-            has learnable per-element affine parameters initialized to ones (for weights)
-            and zeros (for biases). Default: ``True``.
-
-    Attributes:
-        weight: the learnable weights of the module of shape
-            :math:`\text{normalized\_shape}` when :attr:`elementwise_affine` is set to ``True``.
-            The values are initialized to 1.
-        bias:   the learnable bias of the module of shape
-                :math:`\text{normalized\_shape}` when :attr:`elementwise_affine` is set to ``True``.
-                The values are initialized to 0.
-
-    Shape:
-        - Input: :math:`(N, *)`
-        - Output: :math:`(N, *)` (same shape as input)
-
-    Examples::
-
-        >>> # NLP Example
-        >>> batch, sentence_length, embedding_dim = 20, 5, 10
-        >>> embedding = ops.randn(batch, sentence_length, embedding_dim)
-        >>> layer_norm = LayerNorm(embedding_dim)
-        >>> # Activate module
-        >>> layer_norm(embedding)
-        >>>
-        >>> # Image Example
-        >>> N, C, H, W = 20, 5, 10, 10
-        >>> input = ops.randn(N, C, H, W)
-        >>> # Normalize over the last three dimensions (i.e. the channel and spatial dimensions)
-        >>> # as shown in the image below
-        >>> layer_norm = LayerNorm([C, H, W])
-        >>> output = layer_norm(input)
-    """
-
-    normalized_shape: Tuple[int, ...]
-    eps: float
-    elementwise_affine: bool
-
-    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine: bool = True, bias=True, dtype=ms.float32):
-        super().__init__()
-        if isinstance(normalized_shape, numbers.Integral):
-            normalized_shape = (normalized_shape,)
-        self.normalized_shape = tuple(normalized_shape)
-        self.eps = eps
-        self.elementwise_affine = elementwise_affine
-        _weight = np.ones(normalized_shape, dtype=ms.dtype_to_nptype(dtype))
-        _bias = np.zeros(normalized_shape, dtype=ms.dtype_to_nptype(dtype))
-        if self.elementwise_affine:
-            self.weight = ms.Parameter(ms.Tensor.from_numpy(_weight), name="weight")
-            if bias:
-                self.bias = ms.Parameter(ms.Tensor.from_numpy(_bias), name="bias")
-            else:
-                self.bias = ms.Tensor.from_numpy(_bias)
-        else:
-            self.weight = ms.Tensor.from_numpy(_weight)
-            self.bias = ms.Tensor.from_numpy(_bias)
-        # TODO: In fact, we need -len(normalized_shape) instead of -1, but LayerNorm doesn't allow it.
-        #  For positive axis, the ndim of input is needed. Put it in construct?
-        self.layer_norm = ops.LayerNorm(-1, -1, epsilon=eps)
-
-    def construct(self, x: ms.Tensor):
-        x, _, _ = self.layer_norm(x, self.weight, self.bias)
-        return x
-
-
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dtype=None):
     # force fp16 precision calculation
     _dtype = query.dtype
@@ -1317,16 +1218,16 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dtype=None):
 
     if attn_mask is not None:
         attn_mask = attn_mask.masked_fill(not attn_mask, -1e5) if attn_mask.dtype == ms.bool_ else attn_mask
-        attn_weight = ops.softmax(
-            ops.cast(ops.matmul(query, key.swapaxes(-2, -1)) / (query.shape[-1] ** 0.5) + attn_mask, ms.float32),
-            axis=-1,
+        attn_weight = mint.softmax(
+            ops.cast(mint.matmul(query, key.swapaxes(-2, -1)) / (query.shape[-1] ** 0.5) + attn_mask, ms.float32),
+            dim=-1,
         ).astype(_dtype)
     else:
-        attn_weight = ops.softmax(
-            ops.cast(ops.matmul(query, key.swapaxes(-2, -1)) / (query.shape[-1] ** 0.5), ms.float32), axis=-1
+        attn_weight = mint.softmax(
+            ops.cast(mint.matmul(query, key.swapaxes(-2, -1)) / (query.shape[-1] ** 0.5), ms.float32), dim=-1
         ).astype(_dtype)
 
-    out = ops.matmul(attn_weight, value)
+    out = mint.matmul(attn_weight, value)
     out = out.astype(_dtype)
 
     return out

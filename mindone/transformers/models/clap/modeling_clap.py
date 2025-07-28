@@ -26,7 +26,7 @@ from transformers.models.clap.configuration_clap import ClapAudioConfig, ClapCon
 from transformers.utils import ModelOutput, logging
 
 import mindspore as ms
-from mindspore import Parameter, nn, ops
+from mindspore import Parameter, mint, nn, ops
 from mindspore.common.initializer import Normal, One, Zero, initializer
 from mindspore.mint.nn import LayerNorm
 
@@ -115,15 +115,15 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
     """
     # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
     mask = input_ids.ne(padding_idx).int()
-    incremental_indices = (ops.cumsum(mask, axis=1).type_as(mask) + past_key_values_length) * mask
+    incremental_indices = (mint.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
     return incremental_indices.long() + padding_idx
 
 
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/pytorch/pytorch%20lightning/loss%20function/gpu/2021/03/07/CLIP.html#CLIP-loss-function
 def contrastive_loss(logits: ms.Tensor) -> ms.Tensor:
-    labels = ops.arange(len(logits))
-    return ops.cross_entropy(logits, labels)
+    labels = mint.arange(len(logits))
+    return mint.nn.functional.cross_entropy(logits, labels)
 
 
 @dataclass
@@ -242,7 +242,7 @@ class ClapDropPath(nn.Cell):
         # work with diff dim tensors, not just 2D ConvNets
         shape = (hidden_states.shape[0],) + (1,) * (hidden_states.ndim - 1)
 
-        random_tensor = keep_prob + ops.rand(shape, dtype=hidden_states.dtype)
+        random_tensor = keep_prob + mint.rand(shape, dtype=hidden_states.dtype)
         random_tensor.floor_()  # binarize
         output = hidden_states.div(keep_prob) * random_tensor
         return output
@@ -349,7 +349,7 @@ class ClapAudioPatchEmbed(nn.Cell):
                 )
 
             global_hidden_states = self.proj(global_hidden_states)
-            output_width = global_hidden_states.size(-1)
+            output_width = global_hidden_states.shape[-1]
             if len(is_longer_idx) > 0:
                 # local processing
                 local_hidden_states = hidden_states[is_longer_idx, 1:, :, :].contiguous()
@@ -362,8 +362,10 @@ class ClapAudioPatchEmbed(nn.Cell):
                 local_hidden_states = local_hidden_states.view(batch_size, num_channels, features, height, width)
                 local_hidden_states = local_hidden_states.permute((0, 2, 3, 1, 4)).contiguous().flatten(3)
 
-                local_width = local_hidden_states.size(-1)
-                local_hidden_states = ops.pad(local_hidden_states, (0, output_width - local_width), "constant", 0)
+                local_width = local_hidden_states.shape[-1]
+                local_hidden_states = mint.nn.functional.pad(
+                    local_hidden_states, (0, output_width - local_width), "constant", 0
+                )
 
                 global_hidden_states[is_longer_idx] = self.fusion_model(
                     global_hidden_states[is_longer_idx], local_hidden_states
@@ -400,14 +402,14 @@ class ClapAudioSelfAttention(nn.Cell):
         )
 
         self.relative_position_bias_table = Parameter(
-            ops.zeros(((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), num_heads))
+            mint.zeros(((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), num_heads))
         )
 
         # get pair-wise relative position index for each token inside the window
-        coords_h = ops.arange(self.window_size[0])
-        coords_w = ops.arange(self.window_size[1])
-        coords = ops.stack(ops.meshgrid(coords_h, coords_w, indexing="ij"))
-        coords_flatten = ops.flatten(coords, start_dim=1)
+        coords_h = mint.arange(self.window_size[0])
+        coords_w = mint.arange(self.window_size[1])
+        coords = mint.stack(mint.meshgrid(coords_h, coords_w, indexing="ij"))
+        coords_flatten = mint.flatten(coords, start_dim=1)
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
         relative_coords = relative_coords.permute(1, 2, 0).contiguous()
         relative_coords[:, :, 0] += self.window_size[0] - 1
@@ -442,7 +444,7 @@ class ClapAudioSelfAttention(nn.Cell):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = ops.matmul(query_layer, key_layer.swapaxes(-1, -2))
+        attention_scores = mint.matmul(query_layer, key_layer.swapaxes(-1, -2))
 
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
 
@@ -464,7 +466,7 @@ class ClapAudioSelfAttention(nn.Cell):
             attention_scores = attention_scores.view(-1, self.num_attention_heads, dim, dim)
 
         # Normalize the attention scores to probabilities.
-        attention_probs = ops.softmax(attention_scores, axis=-1)
+        attention_probs = mint.softmax(attention_scores, dim=-1)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -474,7 +476,7 @@ class ClapAudioSelfAttention(nn.Cell):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        context_layer = ops.matmul(attention_probs, value_layer)
+        context_layer = mint.matmul(attention_probs, value_layer)
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.shape[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(new_context_layer_shape)
@@ -586,14 +588,14 @@ class ClapAudioLayer(nn.Cell):
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = int(0)
             # self.window_size = (
-            #     ops.min(ms.Tensor(input_resolution)) if torch.jit.is_tracing() else min(input_resolution)
+            #     mint.min(ms.Tensor(input_resolution)) if torch.jit.is_tracing() else min(input_resolution)
             # )
             self.window_size = min(input_resolution)
 
     def get_attn_mask(self, height, width, dtype):
         if self.shift_size > 0:
             # calculate attention mask for SW-MSA
-            img_mask = ops.zeros((1, height, width, 1), dtype=dtype)
+            img_mask = mint.zeros((1, height, width, 1), dtype=dtype)
             height_slices = (
                 slice(0, -self.window_size),
                 slice(-self.window_size, -self.shift_size),
@@ -622,7 +624,7 @@ class ClapAudioLayer(nn.Cell):
         pad_right = (self.window_size - width % self.window_size) % self.window_size
         pad_bottom = (self.window_size - height % self.window_size) % self.window_size
         pad_values = (0, 0, 0, pad_right, 0, pad_bottom)
-        hidden_states = ops.pad(hidden_states, pad_values)
+        hidden_states = mint.nn.functional.pad(hidden_states, pad_values)
         return hidden_states, pad_values
 
     def construct(
@@ -651,7 +653,7 @@ class ClapAudioLayer(nn.Cell):
         _, height_pad, width_pad, _ = hidden_states.shape
         # cyclic shift
         if self.shift_size > 0:
-            shifted_hidden_states = ops.roll(hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            shifted_hidden_states = mint.roll(hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
         else:
             shifted_hidden_states = hidden_states
 
@@ -671,7 +673,7 @@ class ClapAudioLayer(nn.Cell):
 
         # reverse cyclic shift
         if self.shift_size > 0:
-            attention_windows = ops.roll(shifted_windows, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            attention_windows = mint.roll(shifted_windows, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             attention_windows = shifted_windows
 
@@ -776,7 +778,7 @@ class ClapAudioPatchMerging(nn.Cell):
         should_pad = (height % 2 == 1) or (width % 2 == 1)
         if should_pad:
             pad_values = (0, 0, 0, width % 2, 0, height % 2)
-            input_feature = ops.pad(input_feature, pad_values)
+            input_feature = mint.nn.functional.pad(input_feature, pad_values)
 
         return input_feature
 
@@ -797,7 +799,7 @@ class ClapAudioPatchMerging(nn.Cell):
         # [batch_size, height/2, width/2, num_channels]
         input_feature_3 = input_feature[:, 1::2, 1::2, :]
         # batch_size height/2 width/2 4*num_channels
-        input_feature = ops.cat([input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1)
+        input_feature = mint.cat([input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1)
         input_feature = input_feature.view(batch_size, -1, 4 * num_channels)  # batch_size height/2*width/2 4*C
 
         input_feature = self.norm(input_feature)
@@ -820,7 +822,7 @@ class ClapAudioEncoder(nn.Cell):
 
         self.num_features = int(config.patch_embeds_hidden_size * 2 ** (self.num_layers - 1))
 
-        drop_path_rate = [x.item() for x in ops.linspace(0, config.drop_path_rate, sum(config.depths))]
+        drop_path_rate = [x.item() for x in mint.linspace(0, config.drop_path_rate, sum(config.depths))]
 
         grid_size = self.patch_embed.grid_size
         self.input_resolutions = [(grid_size[0] // (2**i), grid_size[1] // (2**i)) for i in range(self.num_layers)]
@@ -862,11 +864,11 @@ class ClapAudioEncoder(nn.Cell):
 
         # to avoid bicubic zero error
         if time_length < spec_width:
-            normalized_input_features = ops.interpolate(
+            normalized_input_features = mint.nn.functional.interpolate(
                 normalized_input_features, (spec_width, freq_length), mode="bicubic", align_corners=True
             )
         if freq_length < spec_heigth:
-            normalized_input_features = ops.interpolate(
+            normalized_input_features = mint.nn.functional.interpolate(
                 normalized_input_features, (time_length, spec_heigth), mode="bicubic", align_corners=True
             )
 
@@ -901,7 +903,7 @@ class ClapAudioEncoder(nn.Cell):
         is_longer_list_idx = None
         if self.enable_fusion:
             is_longer_list = is_longer
-            is_longer_list_idx = ops.where(is_longer_list == 1)[0]
+            is_longer_list_idx = mint.where(is_longer_list == 1)[0]
 
         hidden_states = self.reshape_mel2img(normalized_input_features)
 
@@ -985,8 +987,8 @@ class ClapAudioEncoder(nn.Cell):
         last_hidden_state = (
             last_hidden_state.permute(0, 1, 3, 2, 4).contiguous().reshape(batch_size, n_channels, c_freq_bin, -1)
         )
-        latent_output = self.avgpool(ops.flatten(last_hidden_state, start_dim=2))
-        latent_output = ops.flatten(latent_output, start_dim=1)
+        latent_output = self.avgpool(mint.flatten(last_hidden_state, start_dim=2))
+        latent_output = mint.flatten(latent_output, start_dim=1)
 
         if not return_dict:
             return tuple(
@@ -1045,8 +1047,8 @@ class ClapTextEmbeddings(nn.Cell):
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
-        self.position_ids = ops.arange(config.max_position_embeddings).expand_dims(0)
-        self.token_type_ids = ops.zeros(self.position_ids.shape, dtype=ms.int64)
+        self.position_ids = mint.arange(config.max_position_embeddings).expand_dims(0)
+        self.token_type_ids = mint.zeros(self.position_ids.shape, dtype=ms.int64)
 
         # End copy
         self.padding_idx = config.pad_token_id
@@ -1080,7 +1082,7 @@ class ClapTextEmbeddings(nn.Cell):
                 buffered_token_type_ids_expanded = buffered_token_type_ids.broadcast_to((input_shape[0], seq_length))
                 token_type_ids = buffered_token_type_ids_expanded
             else:
-                token_type_ids = ops.zeros(input_shape, dtype=ms.int64)
+                token_type_ids = mint.zeros(input_shape, dtype=ms.int64)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
@@ -1106,7 +1108,7 @@ class ClapTextEmbeddings(nn.Cell):
         input_shape = inputs_embeds.shape[:-1]
         sequence_length = input_shape[1]
 
-        position_ids = ops.arange(self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=ms.int64)
+        position_ids = mint.arange(self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=ms.int64)
         return position_ids.unsqueeze(0).broadcast_to(input_shape)
 
 
@@ -1170,8 +1172,8 @@ class ClapTextSelfAttention(nn.Cell):
         elif past_key_value is not None:
             key_layer = self.transpose_for_scores(self.key(hidden_states))
             value_layer = self.transpose_for_scores(self.value(hidden_states))
-            key_layer = ops.cat([past_key_value[0], key_layer], dim=2)
-            value_layer = ops.cat([past_key_value[1], value_layer], dim=2)
+            key_layer = mint.cat([past_key_value[0], key_layer], dim=2)
+            value_layer = mint.cat([past_key_value[1], value_layer], dim=2)
         else:
             key_layer = self.transpose_for_scores(self.key(hidden_states))
             value_layer = self.transpose_for_scores(self.value(hidden_states))
@@ -1190,15 +1192,15 @@ class ClapTextSelfAttention(nn.Cell):
             past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = ops.matmul(query_layer, key_layer.swapaxes(-1, -2))
+        attention_scores = mint.matmul(query_layer, key_layer.swapaxes(-1, -2))
 
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             query_length, key_length = query_layer.shape[2], key_layer.shape[2]
             if use_cache:
                 position_ids_l = ms.Tensor(key_length - 1, dtype=ms.int64).view(-1, 1)
             else:
-                position_ids_l = ops.arange(query_length, dtype=ms.int64).view(-1, 1)
-            position_ids_r = ops.arange(key_length, dtype=ms.int64).view(1, -1)
+                position_ids_l = mint.arange(query_length, dtype=ms.int64).view(-1, 1)
+            position_ids_r = mint.arange(key_length, dtype=ms.int64).view(1, -1)
             distance = position_ids_l - position_ids_r
 
             positional_embedding = self.distance_embedding(distance + self.max_position_embeddings - 1)
@@ -1218,7 +1220,7 @@ class ClapTextSelfAttention(nn.Cell):
             attention_scores = attention_scores + attention_mask
 
         # Normalize the attention scores to probabilities.
-        attention_probs = ops.softmax(attention_scores, axis=-1)
+        attention_probs = mint.softmax(attention_scores, dim=-1)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -1228,7 +1230,7 @@ class ClapTextSelfAttention(nn.Cell):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        context_layer = ops.matmul(attention_probs, value_layer)
+        context_layer = mint.matmul(attention_probs, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.shape[:-2] + (self.all_head_size,)
@@ -1762,7 +1764,7 @@ class ClapTextModel(ClapPreTrainedModel):
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if attention_mask is None:
-            attention_mask = ops.ones(((batch_size, seq_length + past_key_values_length)))
+            attention_mask = mint.ones(((batch_size, seq_length + past_key_values_length)))
 
         if token_type_ids is None:
             if hasattr(self.embeddings, "token_type_ids"):
@@ -1770,7 +1772,7 @@ class ClapTextModel(ClapPreTrainedModel):
                 buffered_token_type_ids_expanded = buffered_token_type_ids.broadcast_to((batch_size, seq_length))
                 token_type_ids = buffered_token_type_ids_expanded
             else:
-                token_type_ids = ops.zeros(input_shape, dtype=ms.int64)
+                token_type_ids = mint.zeros(input_shape, dtype=ms.int64)
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
@@ -1782,7 +1784,7 @@ class ClapTextModel(ClapPreTrainedModel):
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.shape
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
-                encoder_attention_mask = ops.ones(encoder_hidden_shape)
+                encoder_attention_mask = mint.ones(encoder_hidden_shape)
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_extended_attention_mask = None
@@ -1884,7 +1886,8 @@ class ClapModel(ClapPreTrainedModel):
         Examples:
 
         ```python
-        >>> from mindone.transformers import AutoTokenizer, ClapModel
+        >>> from transformers import AutoTokenizer
+        >>> from mindone.transformers import ClapModel
 
         >>> model = ClapModel.from_pretrained("laion/clap-htsat-unfused")
         >>> tokenizer = AutoTokenizer.from_pretrained("laion/clap-htsat-unfused")
@@ -1910,8 +1913,7 @@ class ClapModel(ClapPreTrainedModel):
 
         pooled_output = text_outputs[1] if return_dict is not None else text_outputs.pooler_output
         text_features = self.text_projection(pooled_output)
-        normalize = ops.L2Normalize(axis=-1, epsilon=1e-12)
-        text_features = normalize(text_features)
+        text_features = mint.nn.functional.normalize(text_features, dim=-1)
 
         return text_features
 
@@ -1937,7 +1939,7 @@ class ClapModel(ClapPreTrainedModel):
 
         >>> model = ClapModel.from_pretrained("laion/clap-htsat-unfused")
         >>> feature_extractor = AutoFeatureExtractor.from_pretrained("laion/clap-htsat-unfused")
-        >>> random_audio = ops.rand((16_000))
+        >>> random_audio = mint.rand((16_000))
         >>> inputs = feature_extractor(random_audio, return_tensors="np")
         >>> audio_features = model.get_audio_features(**inputs)
         ```"""
@@ -1956,8 +1958,7 @@ class ClapModel(ClapPreTrainedModel):
         pooled_output = audio_outputs[1] if not return_dict else audio_outputs.pooler_output
 
         audio_features = self.audio_projection(pooled_output)
-        normalize = ops.L2Normalize(axis=-1, epsilon=1e-12)
-        audio_features = normalize(audio_features)
+        audio_features = mint.nn.functional.normalize(audio_features, dim=-1)
 
         return audio_features
 
@@ -2033,8 +2034,8 @@ class ClapModel(ClapPreTrainedModel):
         # cosine similarity as logits
         logit_scale_text = self.logit_scale_t.exp()
         logit_scale_audio = self.logit_scale_a.exp()
-        logits_per_text = ops.matmul(text_embeds, audio_embeds.t()) * logit_scale_text
-        logits_per_audio = ops.matmul(audio_embeds, text_embeds.t()) * logit_scale_audio
+        logits_per_text = mint.matmul(text_embeds, audio_embeds.t()) * logit_scale_text
+        logits_per_audio = mint.matmul(audio_embeds, text_embeds.t()) * logit_scale_audio
 
         loss = None
         if return_loss:
@@ -2088,7 +2089,8 @@ class ClapTextModelWithProjection(ClapPreTrainedModel):
         Examples:
 
         ```python
-        >>> from mindone.transformers import AutoTokenizer, ClapTextModelWithProjection
+        >>> from transformers import AutoTokenizer
+        >>> from mindone.transformers import ClapTextModelWithProjection
 
         >>> model = ClapTextModelWithProjection.from_pretrained("laion/clap-htsat-unfused")
         >>> tokenizer = AutoTokenizer.from_pretrained("laion/clap-htsat-unfused")
@@ -2154,7 +2156,8 @@ class ClapAudioModelWithProjection(ClapPreTrainedModel):
 
         ```python
         >>> from datasets import load_dataset
-        >>> from mindone.transformers import ClapAudioModelWithProjection, ClapProcessor
+        >>> from mindone.transformers import ClapAudioModelWithProjection
+        >>> from transformers import ClapProcessor
 
         >>> model = ClapAudioModelWithProjection.from_pretrained("laion/clap-htsat-fused")
         >>> processor = ClapProcessor.from_pretrained("laion/clap-htsat-fused")
