@@ -555,6 +555,13 @@ from .models.swin import (
     SwinModel,
     SwinPreTrainedModel,
 )
+from .models.swinv2 import (
+    Swinv2Backbone,
+    Swinv2ForImageClassification,
+    Swinv2ForMaskedImageModeling,
+    Swinv2Model,
+    Swinv2PreTrainedModel,
+)
 from .models.switch_transformers import (
     SwitchTransformersEncoderModel,
     SwitchTransformersForConditionalGeneration,

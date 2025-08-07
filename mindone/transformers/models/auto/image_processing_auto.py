@@ -56,6 +56,7 @@ else:
             ("llava_next", ("LlavaNextImageProcessor",)),
             ("llava_next_video", ("LlavaNextVideoImageProcessor",)),
             ("llava_onevision", ("LlavaOnevisionImageProcessor",)),
+            ("swinv2", ("ViTImageProcessor",)),
         ]
     )
 
