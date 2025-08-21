@@ -404,6 +404,21 @@ from .models.llava_onevision import (
     LlavaOnevisionProcessor,
     LlavaOnevisionVideoProcessor,
 )
+from .models.longformer import (
+    LongformerForMaskedLM,
+    LongformerForMultipleChoice,
+    LongformerForQuestionAnswering,
+    LongformerForSequenceClassification,
+    LongformerForTokenClassification,
+    LongformerModel,
+    LongformerPreTrainedModel,
+)
+from .models.longt5 import (
+    LongT5EncoderModel,
+    LongT5ForConditionalGeneration,
+    LongT5Model,
+    LongT5PreTrainedModel,
+)
 from .models.m2m_100 import M2M100ForConditionalGeneration, M2M100Model, M2M100PreTrainedModel
 from .models.megatron_bert import (
     MegatronBertForCausalLM,
@@ -607,6 +622,11 @@ from .models.umt5 import (
 )
 from .models.vit import ViTForImageClassification, ViTForMaskedImageModeling, ViTModel, ViTPreTrainedModel
 from .models.vits import VitsModel, VitsPreTrainedModel
+from .models.vivit import (
+    VivitForVideoClassification,
+    VivitModel,
+    VivitPreTrainedModel,
+)
 from .models.wav2vec2 import (
     Wav2Vec2FeatureExtractor,
     Wav2Vec2ForAudioFrameClassification,

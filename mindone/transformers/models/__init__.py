@@ -62,6 +62,8 @@ from . import (
     llava_next,
     llava_next_video,
     llava_onevision,
+    longformer,
+    longt5,
     m2m_100,
     megatron_bert,
     minicpm4,
@@ -91,6 +93,7 @@ from . import (
     umt5,
     vit,
     vits,
+    vivit,
     wav2vec2,
     xlm_roberta,
 )
