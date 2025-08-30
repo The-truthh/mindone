@@ -137,6 +137,7 @@ from .models.auto import (
     AutoModelWithLMHead,
     AutoProcessor,
 )
+from .models.aya_vision import AyaVisionForConditionalGeneration, AyaVisionPreTrainedModel
 from .models.bart import (
     BartForCausalLM,
     BartForConditionalGeneration,
@@ -199,6 +200,13 @@ from .models.blip_2 import (
     Blip2PreTrainedModel,
     Blip2QFormerModel,
     Blip2VisionModel,
+)
+from .models.bridgetower import (
+    BridgeTowerForContrastiveLearning,
+    BridgeTowerForImageAndTextRetrieval,
+    BridgeTowerForMaskedLM,
+    BridgeTowerModel,
+    BridgeTowerPreTrainedModel,
 )
 from .models.camembert import (
     CamembertForCausalLM,
