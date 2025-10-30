@@ -1052,6 +1052,7 @@ from .models.perceiver import (
     PerceiverModel,
     PerceiverPreTrainedModel,
 )
+from .models.perception_lm import PerceptionLMForConditionalGeneration, PerceptionLMPreTrainedModel, PerceptionLMModel
 from .models.persimmon import (
     PersimmonForCausalLM,
     PersimmonForSequenceClassification,

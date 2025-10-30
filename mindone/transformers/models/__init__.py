@@ -169,6 +169,7 @@ from . import (
     pegasus,
     pegasus_x,
     perceiver,
+    perception_lm,
     persimmon,
     phi,
     phi3,
