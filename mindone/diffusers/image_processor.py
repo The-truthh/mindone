@@ -410,7 +410,7 @@ class VaeImageProcessor(ConfigMixin):
         src_w = width if ratio < src_ratio else image.width * height // image.height
         src_h = height if ratio >= src_ratio else image.height * width // image.width
 
-        resized = image.resize((src_w, src_h), resample=PIL_INTERPOLATION["lanczos"])
+        resized = image.resize((src_w, src_h), resample=PIL_INTERPOLATION[self.config.resample])
         res = Image.new("RGB", (width, height))
         res.paste(resized, box=(width // 2 - src_w // 2, height // 2 - src_h // 2))
 
@@ -461,7 +461,7 @@ class VaeImageProcessor(ConfigMixin):
         src_w = width if ratio > src_ratio else image.width * height // image.height
         src_h = height if ratio <= src_ratio else image.height * width // image.width
 
-        resized = image.resize((src_w, src_h), resample=PIL_INTERPOLATION["lanczos"])
+        resized = image.resize((src_w, src_h), resample=PIL_INTERPOLATION[self.config.resample])
         res = Image.new("RGB", (width, height))
         res.paste(resized, box=(width // 2 - src_w // 2, height // 2 - src_h // 2))
         return res
@@ -524,6 +524,7 @@ class VaeImageProcessor(ConfigMixin):
                 size=(height, width),
             )
             image = self.ms_to_numpy(image)
+
         return image
 
     def binarize(self, image: PIL.Image.Image) -> PIL.Image.Image:
@@ -752,7 +753,7 @@ class VaeImageProcessor(ConfigMixin):
             image (`ms.Tensor`):
                 The image input, should be a mindspore tensor with shape `B x C x H x W`.
             output_type (`str`, *optional*, defaults to `pil`):
-                The output type of the image, can be one of `pil`, `np`, `pt`, `latent`.
+                The output type of the image, can be one of `pil`, `np`, `ms`, `latent`.
             do_denormalize (`List[bool]`, *optional*, defaults to `None`):
                 Whether to denormalize the image to [0,1]. If `None`, will use the value of `do_normalize` in the
                 `VaeImageProcessor` config.
@@ -837,6 +838,137 @@ class VaeImageProcessor(ConfigMixin):
         return image
 
 
+class InpaintProcessor(ConfigMixin):
+    """
+    Image processor for inpainting image and mask.
+    """
+
+    config_name = CONFIG_NAME
+
+    @register_to_config
+    def __init__(
+        self,
+        do_resize: bool = True,
+        vae_scale_factor: int = 8,
+        vae_latent_channels: int = 4,
+        resample: str = "lanczos",
+        reducing_gap: int = None,
+        do_normalize: bool = True,
+        do_binarize: bool = False,
+        do_convert_grayscale: bool = False,
+        mask_do_normalize: bool = False,
+        mask_do_binarize: bool = True,
+        mask_do_convert_grayscale: bool = True,
+    ):
+        super().__init__()
+
+        self._image_processor = VaeImageProcessor(
+            do_resize=do_resize,
+            vae_scale_factor=vae_scale_factor,
+            vae_latent_channels=vae_latent_channels,
+            resample=resample,
+            reducing_gap=reducing_gap,
+            do_normalize=do_normalize,
+            do_binarize=do_binarize,
+            do_convert_grayscale=do_convert_grayscale,
+        )
+        self._mask_processor = VaeImageProcessor(
+            do_resize=do_resize,
+            vae_scale_factor=vae_scale_factor,
+            vae_latent_channels=vae_latent_channels,
+            resample=resample,
+            reducing_gap=reducing_gap,
+            do_normalize=mask_do_normalize,
+            do_binarize=mask_do_binarize,
+            do_convert_grayscale=mask_do_convert_grayscale,
+        )
+
+    def preprocess(
+        self,
+        image: PIL.Image.Image,
+        mask: PIL.Image.Image = None,
+        height: int = None,
+        width: int = None,
+        padding_mask_crop: Optional[int] = None,
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
+        """
+        Preprocess the image and mask.
+        """
+        if mask is None and padding_mask_crop is not None:
+            raise ValueError("mask must be provided if padding_mask_crop is provided")
+
+        # if mask is None, same behavior as regular image processor
+        if mask is None:
+            return self._image_processor.preprocess(image, height=height, width=width)
+
+        if padding_mask_crop is not None:
+            crops_coords = self._image_processor.get_crop_region(mask, width, height, pad=padding_mask_crop)
+            resize_mode = "fill"
+        else:
+            crops_coords = None
+            resize_mode = "default"
+
+        processed_image = self._image_processor.preprocess(
+            image,
+            height=height,
+            width=width,
+            crops_coords=crops_coords,
+            resize_mode=resize_mode,
+        )
+
+        processed_mask = self._mask_processor.preprocess(
+            mask,
+            height=height,
+            width=width,
+            resize_mode=resize_mode,
+            crops_coords=crops_coords,
+        )
+
+        if crops_coords is not None:
+            postprocessing_kwargs = {
+                "crops_coords": crops_coords,
+                "original_image": image,
+                "original_mask": mask,
+            }
+        else:
+            postprocessing_kwargs = {
+                "crops_coords": None,
+                "original_image": None,
+                "original_mask": None,
+            }
+
+        return processed_image, processed_mask, postprocessing_kwargs
+
+    def postprocess(
+        self,
+        image: ms.Tensor,
+        output_type: str = "pil",
+        original_image: Optional[PIL.Image.Image] = None,
+        original_mask: Optional[PIL.Image.Image] = None,
+        crops_coords: Optional[Tuple[int, int, int, int]] = None,
+    ) -> Tuple[PIL.Image.Image, PIL.Image.Image]:
+        """
+        Postprocess the image, optionally apply mask overlay
+        """
+        image = self._image_processor.postprocess(
+            image,
+            output_type=output_type,
+        )
+        # optionally apply the mask overlay
+        if crops_coords is not None and (original_image is None or original_mask is None):
+            raise ValueError("original_image and original_mask must be provided if crops_coords is provided")
+
+        elif crops_coords is not None and output_type != "pil":
+            raise ValueError("output_type must be 'pil' if crops_coords is provided")
+
+        elif crops_coords is not None:
+            image = [
+                self._image_processor.apply_overlay(original_mask, original_image, i, crops_coords) for i in image
+            ]
+
+        return image
+
+
 class VaeImageProcessorLDM3D(VaeImageProcessor):
     """
     Image processor for VAE LDM3D.
@@ -912,16 +1044,39 @@ class VaeImageProcessorLDM3D(VaeImageProcessor):
     def rgblike_to_depthmap(image: Union[np.ndarray, ms.Tensor]) -> Union[np.ndarray, ms.Tensor]:
         r"""
         Convert an RGB-like depth image to a depth map.
-
-        Args:
-            image (`Union[np.ndarray, ms.Tensor]`):
-                The RGB-like depth image to convert.
-
-        Returns:
-            `Union[np.ndarray, ms.Tensor]`:
-                The corresponding depth map.
         """
-        return image[:, :, 1] * 2**8 + image[:, :, 2]
+        # 1. Cast the tensor to a larger integer type (e.g., int32)
+        #    to safely perform the multiplication by 256.
+        # 2. Perform the 16-bit combination: High-byte * 256 + Low-byte.
+        # 3. Cast the final result to the desired depth map type (uint16) if needed
+        #    before returning, though leaving it as int32/int64 is often safer
+        #    for return value from a library function.
+
+        if isinstance(image, ms.Tensor):
+            # Cast to a safe dtype (e.g., int32 or int64) for the calculation
+            original_dtype = image.dtype
+            image_safe = image.to(ms.int32)
+
+            # Calculate the depth map
+            depth_map = image_safe[:, :, 1] * 256 + image_safe[:, :, 2]
+
+            # You may want to cast the final result to uint16, but casting to a
+            # larger int type (like int32) is sufficient to fix the overflow.
+            # depth_map = depth_map.to(ms.uint16) # Uncomment if uint16 is strictly required
+            return depth_map.to(original_dtype)
+
+        elif isinstance(image, np.ndarray):
+            # NumPy equivalent: Cast to a safe dtype (e.g., np.int32)
+            original_dtype = image.dtype
+            image_safe = image.astype(np.int32)
+
+            # Calculate the depth map
+            depth_map = image_safe[:, :, 1] * 256 + image_safe[:, :, 2]
+
+            # depth_map = depth_map.astype(np.uint16) # Uncomment if uint16 is strictly required
+            return depth_map.astype(original_dtype)
+        else:
+            raise TypeError("Input image must be a ms.Tensor or np.ndarray")
 
     def numpy_to_depth(self, images: np.ndarray) -> List[PIL.Image.Image]:
         r"""
@@ -964,7 +1119,7 @@ class VaeImageProcessorLDM3D(VaeImageProcessor):
             image (`ms.Tensor`):
                 The image input, should be a mindspore tensor with shape `B x C x H x W`.
             output_type (`str`, *optional*, defaults to `pil`):
-                The output type of the image, can be one of `pil`, `np`, `pt`, `latent`.
+                The output type of the image, can be one of `pil`, `np`, `ms`, `latent`.
             do_denormalize (`List[bool]`, *optional*, defaults to `None`):
                 Whether to denormalize the image to [0,1]. If `None`, will use the value of `do_normalize` in the
                 `VaeImageProcessor` config.
@@ -977,10 +1132,10 @@ class VaeImageProcessorLDM3D(VaeImageProcessor):
             raise ValueError(
                 f"Input for postprocessing is in incorrect format: {type(image)}. We only support MindSpore tensor"
             )
-        if output_type not in ["latent", "pt", "np", "pil"]:
+        if output_type not in ["latent", "ms", "np", "pil"]:
             deprecation_message = (
                 f"the output_type {output_type} is outdated and has been set to `np`. Please make sure to set it to one of these instead: "
-                "`pil`, `np`, `pt`, `latent`"
+                "`pil`, `np`, `ms`, `latent`"
             )
             deprecate("Unsupported output_type", "1.0.0", deprecation_message, standard_warn=False)
             output_type = "np"

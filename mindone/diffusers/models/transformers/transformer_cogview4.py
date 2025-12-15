@@ -540,7 +540,7 @@ class CogView4TransformerBlock(nn.Cell):
         image_rotary_emb: Optional[Union[Tuple[ms.Tensor, ms.Tensor], List[Tuple[ms.Tensor, ms.Tensor]]]] = None,
         attention_mask: Optional[Dict[str, ms.Tensor]] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> ms.Tensor:
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
         # 1. Timestep conditioning
         (
             norm_hidden_states,
@@ -759,7 +759,7 @@ class CogView4Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Cach
         return_dict: bool = True,
         attention_mask: Optional[ms.Tensor] = None,
         image_rotary_emb: Optional[Union[Tuple[ms.Tensor, ms.Tensor], List[Tuple[ms.Tensor, ms.Tensor]]]] = None,
-    ) -> Union[ms.Tensor, Transformer2DModelOutput]:
+    ) -> Union[Tuple[ms.Tensor], Transformer2DModelOutput]:
         if attention_kwargs is not None and "scale" in attention_kwargs:
             # weight the lora layers by setting `lora_scale` for each PEFT layer here
             # and remove `lora_scale` from each PEFT layer at the end.

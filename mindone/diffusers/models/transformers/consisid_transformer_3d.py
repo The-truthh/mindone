@@ -24,8 +24,8 @@ from mindspore import mint, nn
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import PeftAdapterMixin
 from ...utils import logging
-from ..attention import Attention, FeedForward
-from ..attention_processor import AttentionProcessor, CogVideoXAttnProcessor2_0
+from ..attention import Attention, AttentionMixin, FeedForward
+from ..attention_processor import CogVideoXAttnProcessor2_0
 from ..embeddings import CogVideoXPatchEmbed, TimestepEmbedding, Timesteps
 from ..modeling_outputs import Transformer2DModelOutput
 from ..modeling_utils import ModelMixin
@@ -316,7 +316,7 @@ class ConsisIDBlock(nn.Cell):
         encoder_hidden_states: ms.Tensor,
         temb: ms.Tensor,
         image_rotary_emb: Optional[Tuple[ms.Tensor, ms.Tensor]] = None,
-    ) -> ms.Tensor:
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
         text_seq_length = encoder_hidden_states.shape[1]
 
         # norm & modulate
@@ -349,7 +349,7 @@ class ConsisIDBlock(nn.Cell):
         return hidden_states, encoder_hidden_states
 
 
-class ConsisIDTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
+class ConsisIDTransformer3DModel(ModelMixin, AttentionMixin, ConfigMixin, PeftAdapterMixin):
     """
     A Transformer model for video-like data in [ConsisID](https://github.com/PKU-YuanGroup/ConsisID).
 
@@ -623,66 +623,6 @@ class ConsisIDTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-    @property
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
-    def attn_processors(self) -> Dict[str, AttentionProcessor]:
-        r"""
-        Returns:
-            `dict` of attention processors: A dictionary containing all attention processors used in the model with
-            indexed by its weight name.
-        """
-        # set recursively
-        processors = {}
-
-        def fn_recursive_add_processors(name: str, module: nn.Cell, processors: Dict[str, AttentionProcessor]):
-            if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor()
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
-
-            return processors
-
-        for name, module in self.name_cells().items():
-            fn_recursive_add_processors(name, module, processors)
-
-        return processors
-
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
-        r"""
-        Sets the attention processor to use to compute attention.
-
-        Parameters:
-            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
-                The instantiated processor class or a dictionary of processor classes that will be set as the processor
-                for **all** `Attention` layers.
-
-                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
-                processor. This is strongly recommended when setting trainable attention processors.
-
-        """
-        count = len(self.attn_processors.keys())
-
-        if isinstance(processor, dict) and len(processor) != count:
-            raise ValueError(
-                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
-                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
-            )
-
-        def fn_recursive_attn_processor(name: str, module: nn.Cell, processor):
-            if hasattr(module, "set_processor"):
-                if not isinstance(processor, dict):
-                    module.set_processor(processor)
-                else:
-                    module.set_processor(processor.pop(f"{name}.processor"))
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
-
-        for name, module in self.name_cells().items():
-            fn_recursive_attn_processor(name, module, processor)
-
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -694,7 +634,7 @@ class ConsisIDTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         id_cond: Optional[ms.Tensor] = None,
         id_vit_hidden: Optional[ms.Tensor] = None,
         return_dict: bool = True,
-    ):
+    ) -> Union[Tuple[ms.Tensor], Transformer2DModelOutput]:
         if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
             # weight the lora layers by setting `lora_scale` for each PEFT layer here
             # and remove `lora_scale` from each PEFT layer at the end.

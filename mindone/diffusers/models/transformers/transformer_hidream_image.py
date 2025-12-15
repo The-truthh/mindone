@@ -53,7 +53,7 @@ class HiDreamImageTimestepEmbed(nn.Cell):
         self.time_proj = Timesteps(num_channels=frequency_embedding_size, flip_sin_to_cos=True, downscale_freq_shift=0)
         self.timestep_embedder = TimestepEmbedding(in_channels=frequency_embedding_size, time_embed_dim=hidden_size)
 
-    def construct(self, timesteps: ms.Tensor, wdtype: Optional[ms.Type] = None):
+    def construct(self, timesteps: ms.Tensor, wdtype: Optional[ms.Type] = None) -> ms.Tensor:
         t_emb = self.time_proj(timesteps).to(dtype=wdtype)
         t_emb = self.timestep_embedder(t_emb)
         return t_emb
@@ -87,7 +87,7 @@ class HiDreamImagePatchEmbed(nn.Cell):
         self.out_channels = out_channels
         self.proj = mint.nn.Linear(in_channels * patch_size * patch_size, out_channels, bias=True)
 
-    def construct(self, latent):
+    def construct(self, latent) -> ms.Tensor:
         latent = self.proj(latent)
         return latent
 
@@ -582,7 +582,7 @@ class HiDreamImageTransformerBlock(nn.Cell):
         encoder_hidden_states: Optional[ms.Tensor] = None,
         temb: Optional[ms.Tensor] = None,
         image_rotary_emb: ms.Tensor = None,
-    ) -> ms.Tensor:
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
         wtype = hidden_states.dtype
         (
             shift_msa_i,
@@ -640,7 +640,7 @@ class HiDreamBlock(nn.Cell):
         encoder_hidden_states: Optional[ms.Tensor] = None,
         temb: Optional[ms.Tensor] = None,
         image_rotary_emb: ms.Tensor = None,
-    ) -> ms.Tensor:
+    ) -> Union[ms.Tensor, Tuple[ms.Tensor, ms.Tensor]]:
         return self.block(
             hidden_states=hidden_states,
             hidden_states_masks=hidden_states_masks,
@@ -836,7 +836,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, 
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = False,
         **kwargs,
-    ):
+    ) -> Union[Tuple[ms.Tensor], Transformer2DModelOutput]:
         encoder_hidden_states = kwargs.get("encoder_hidden_states", None)
 
         if encoder_hidden_states is not None:

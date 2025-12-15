@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 _CAN_USE_FLASH_ATTN = True
 _CAN_USE_FLASH_ATTN_3 = False
+_CAN_USE_AITER_ATTN = False
 _CAN_USE_SAGE_ATTN = False
 _CAN_USE_FLEX_ATTN = False
 _CAN_USE_NPU_ATTN = False
@@ -44,6 +45,10 @@ else:
     flash_attn_3_varlen_func = None
     flash_attn_3_func_hub = None
 
+if _CAN_USE_AITER_ATTN:
+    raise RuntimeError("Aiter Attention is not usable.")
+else:
+    aiter_flash_attn_func = None
 
 if _CAN_USE_SAGE_ATTN:
     raise RuntimeError("Sage Attention is not usable.")
@@ -89,13 +94,11 @@ def custom_op_no_op(name, fn=None, /, *, mutates_args, device_types=None, schema
 
     return wrap if fn is None else fn
 
-
 def register_fake_no_op(op, fn=None, /, *, lib=None, _stacklevel=1):
     def wrap(func):
         return func
 
     return wrap if fn is None else fn
-
 
 _custom_op = custom_op_no_op
 _register_fake = register_fake_no_op
@@ -109,21 +112,22 @@ logger = get_logger(__name__)  # pylint: disable=invalid-name
 # - CP with sage attention, flex, xformers, other missing backends
 # - Add support for normal and CP training with backends that don't support it yet
 
-_SAGE_ATTENTION_PV_ACCUM_DTYPE = Literal["fp32", "fp32+fp32"]
-_SAGE_ATTENTION_QK_QUANT_GRAN = Literal["per_thread", "per_warp"]
-_SAGE_ATTENTION_QUANTIZATION_BACKEND = Literal["cuda", "triton"]
-
 
 class AttentionBackendName(str, Enum):
     # EAGER = "eager"
 
     # `flash-attn`
     FLASH = "flash"
+    FLASH_HUB = "flash_hub"
     FLASH_VARLEN = "flash_varlen"
+    FLASH_VARLEN_HUB = "flash_varlen_hub"
     _FLASH_3 = "_flash_3"
     _FLASH_VARLEN_3 = "_flash_varlen_3"
     _FLASH_3_HUB = "_flash_3_hub"
-    _FLASH_VARLEN_3_HUB = "_flash_varlen_3_hub"  # not supported yet.
+    _FLASH_3_VARLEN_HUB = "_flash_3_varlen_hub"
+
+    # `aiter`
+    AITER = "aiter"
 
     # PyTorch native
     FLEX = "flex"
@@ -137,6 +141,7 @@ class AttentionBackendName(str, Enum):
 
     # `sageattention`
     SAGE = "sage"
+    SAGE_HUB = "sage_hub"
     SAGE_VARLEN = "sage_varlen"
     _SAGE_QK_INT8_PV_FP8_CUDA = "_sage_qk_int8_pv_fp8_cuda"
     _SAGE_QK_INT8_PV_FP8_CUDA_SM90 = "_sage_qk_int8_pv_fp8_cuda_sm90"
@@ -154,7 +159,7 @@ class _AttentionBackendRegistry:
     _backends = {}
     _constraints = {}
     _supported_arg_names = {}
-    _supports_context_parallel = {}
+    _supports_context_parallel = set()
     _active_backend = AttentionBackendName(DIFFUSERS_ATTN_BACKEND)
     _checks_enabled = DIFFUSERS_ATTN_CHECKS
 
@@ -171,7 +176,9 @@ class _AttentionBackendRegistry:
             Registry._backends[backend] = func
             Registry._constraints[backend] = constraints or []
             Registry._supported_arg_names[backend] = set(inspect.signature(func).parameters.keys())
-            Registry._supports_context_parallel[backend] = supports_context_parallel
+            if supports_context_parallel:
+                Registry._supports_context_parallel.add(backend.value)
+
             return func
 
         return decorator
@@ -187,16 +194,45 @@ class _AttentionBackendRegistry:
         return list(Registry._backends.keys())
 
     @staticmethod
-    def _is_context_parallel_enabled(
-        backend: AttentionBackendName, parallel_config: Optional["ParallelConfig"]
+    def _is_context_parallel_available(
+        backend: AttentionBackendName,
     ) -> bool:
         Registry = _AttentionBackendRegistry
-        supports_context_parallel = backend in Registry._supports_context_parallel
-        is_degree_greater_than_1 = parallel_config is not None and (
-            parallel_config.context_parallel_config.ring_degree > 1
-            or parallel_config.context_parallel_config.ulysses_degree > 1
-        )
-        return supports_context_parallel and is_degree_greater_than_1
+        supports_context_parallel = backend.value in Registry._supports_context_parallel
+        return supports_context_parallel
+
+
+@dataclass
+class _HubKernelConfig:
+    """Configuration for downloading and using a hub-based attention kernel."""
+
+    repo_id: str
+    function_attr: str
+    revision: Optional[str] = None
+    kernel_fn: Optional[Callable] = None
+
+
+# Registry for hub-based attention kernels
+_HUB_KERNELS_REGISTRY: Dict["AttentionBackendName", _HubKernelConfig] = {
+    # TODO: temporary revision for now. Remove when merged upstream into `main`.
+    AttentionBackendName._FLASH_3_HUB: _HubKernelConfig(
+        repo_id="kernels-community/flash-attn3", function_attr="flash_attn_func", revision="fake-ops-return-probs"
+    ),
+    AttentionBackendName._FLASH_3_VARLEN_HUB: _HubKernelConfig(
+        repo_id="kernels-community/flash-attn3",
+        function_attr="flash_attn_varlen_func",
+        # revision="fake-ops-return-probs",
+    ),
+    AttentionBackendName.FLASH_HUB: _HubKernelConfig(
+        repo_id="kernels-community/flash-attn2", function_attr="flash_attn_func", revision=None
+    ),
+    AttentionBackendName.FLASH_VARLEN_HUB: _HubKernelConfig(
+        repo_id="kernels-community/flash-attn2", function_attr="flash_attn_varlen_func", revision=None
+    ),
+    AttentionBackendName.SAGE_HUB: _HubKernelConfig(
+        repo_id="kernels-community/sage_attention", function_attr="sageattn", revision=None
+    ),
+}
 
 
 @contextlib.contextmanager
@@ -209,6 +245,7 @@ def attention_backend(backend: Union[str, AttentionBackendName] = AttentionBacke
 
     backend = AttentionBackendName(backend)
     _check_attention_backend_requirements(backend)
+    # _maybe_download_kernel_for_backend(backend)
 
     old_backend = _AttentionBackendRegistry._active_backend
     _AttentionBackendRegistry._active_backend = backend
@@ -242,14 +279,6 @@ def dispatch_attention_fn(
     else:
         backend_name = AttentionBackendName(backend)
         backend_fn = _AttentionBackendRegistry._backends.get(backend_name)
-
-    if parallel_config is not None and not _AttentionBackendRegistry._is_context_parallel_enabled(
-        backend_name, parallel_config
-    ):
-        raise ValueError(
-            f"Backend {backend_name} either does not support context parallelism or context parallelism "
-            f"was enabled with a world size of 1."
-        )
 
     kwargs = {
         "query": query,
@@ -311,12 +340,18 @@ def _check_shape(
     attn_mask: Optional[ms.Tensor] = None,
     **kwargs,
 ) -> None:
+    # Expected shapes:
+    # query: (batch_size, seq_len_q, num_heads, head_dim)
+    # key:   (batch_size, seq_len_kv, num_heads, head_dim)
+    # value: (batch_size, seq_len_kv, num_heads, head_dim)
+    # attn_mask: (seq_len_q, seq_len_kv) or (batch_size, seq_len_q, seq_len_kv)
+    #            or (batch_size, num_heads, seq_len_q, seq_len_kv)
     if query.shape[-1] != key.shape[-1]:
-        raise ValueError("Query and key must have the same last dimension.")
-    if query.shape[-2] != value.shape[-2]:
-        raise ValueError("Query and value must have the same second to last dimension.")
-    if attn_mask is not None and attn_mask.shape[-1] != key.shape[-2]:
-        raise ValueError("Attention mask must match the key's second to last dimension.")
+        raise ValueError("Query and key must have the same head dimension.")
+    if key.shape[-3] != value.shape[-3]:
+        raise ValueError("Key and value must have the same sequence length.")
+    if attn_mask is not None and attn_mask.shape[-1] != key.shape[-3]:
+        raise ValueError("Attention mask must match the key's sequence length.")
 
 
 # ===== Helper functions =====
@@ -331,9 +366,20 @@ def _check_attention_backend_requirements(backend: AttentionBackendName) -> None
         if not _CAN_USE_FLASH_ATTN_3:
             raise RuntimeError(f"Flash Attention 3 backend '{backend.value}' is not usable.")
 
-    # TODO: add support Hub variant of FA3 varlen later
-    elif backend in [AttentionBackendName._FLASH_3_HUB]:
-        raise RuntimeError(f"Flash Attention 3 Hub backend '{backend.value}' is not usable.")
+    elif backend in [
+        AttentionBackendName.FLASH_HUB,
+        AttentionBackendName.FLASH_VARLEN_HUB,
+        AttentionBackendName._FLASH_3_HUB,
+        AttentionBackendName._FLASH_3_VARLEN_HUB,
+        AttentionBackendName.SAGE_HUB,
+    ]:
+        raise RuntimeError(f"Backend '{backend.value}' is not usable.")
+
+    elif backend == AttentionBackendName.AITER:
+        if not _CAN_USE_AITER_ATTN:
+            raise RuntimeError(
+                f"Aiter Attention backend '{backend.value}' is not usable."
+            )
 
     elif backend in [
         AttentionBackendName.SAGE,

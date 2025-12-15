@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, Union
 
 import mindspore as ms
 from mindspore import mint, nn
@@ -123,7 +123,7 @@ class LuminaNextDiTBlock(nn.Cell):
         encoder_mask: ms.Tensor,
         temb: ms.Tensor,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> ms.Tensor:
         """
         Perform a forward pass through the LuminaNextDiTBlock.
 
@@ -296,7 +296,7 @@ class LuminaNextDiT2DModel(ModelMixin, ConfigMixin):
         image_rotary_emb: ms.Tensor,
         cross_attention_kwargs: Dict[str, Any] = None,
         return_dict=False,
-    ) -> ms.Tensor:
+    ) -> Union[Tuple[ms.Tensor], Transformer2DModelOutput]:
         """
         Forward pass of LuminaNextDiT.
 

@@ -105,7 +105,7 @@ def get_block(
     attention_head_dim: int,
     norm_type: str,
     act_fn: str,
-    qkv_mutliscales: Tuple[int] = (),
+    qkv_mutliscales: Tuple[int, ...] = (),
 ):
     if block_type == "ResBlock":
         block = ResBlock(in_channels, out_channels, norm_type, act_fn)
@@ -215,8 +215,8 @@ class Encoder(nn.Cell):
         latent_channels: int,
         attention_head_dim: int = 32,
         block_type: Union[str, Tuple[str]] = "ResBlock",
-        block_out_channels: Tuple[int] = (128, 256, 512, 512, 1024, 1024),
-        layers_per_block: Tuple[int] = (2, 2, 2, 2, 2, 2),
+        block_out_channels: Tuple[int, ...] = (128, 256, 512, 512, 1024, 1024),
+        layers_per_block: Tuple[int, ...] = (2, 2, 2, 2, 2, 2),
         qkv_multiscales: Tuple[Tuple[int, ...], ...] = ((), (), (), (5,), (5,), (5,)),
         downsample_block_type: str = "pixel_unshuffle",
         out_shortcut: bool = True,
@@ -305,8 +305,8 @@ class Decoder(nn.Cell):
         latent_channels: int,
         attention_head_dim: int = 32,
         block_type: Union[str, Tuple[str]] = "ResBlock",
-        block_out_channels: Tuple[int] = (128, 256, 512, 512, 1024, 1024),
-        layers_per_block: Tuple[int] = (2, 2, 2, 2, 2, 2),
+        block_out_channels: Tuple[int, ...] = (128, 256, 512, 512, 1024, 1024),
+        layers_per_block: Tuple[int, ...] = (2, 2, 2, 2, 2, 2),
         qkv_multiscales: Tuple[Tuple[int, ...], ...] = ((), (), (), (5,), (5,), (5,)),
         norm_type: Union[str, Tuple[str]] = "rms_norm",
         act_fn: Union[str, Tuple[str]] = "silu",
@@ -455,8 +455,8 @@ class AutoencoderDC(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalModel
         decoder_block_types: Union[str, Tuple[str]] = "ResBlock",
         encoder_block_out_channels: Tuple[int, ...] = (128, 256, 512, 512, 1024, 1024),
         decoder_block_out_channels: Tuple[int, ...] = (128, 256, 512, 512, 1024, 1024),
-        encoder_layers_per_block: Tuple[int] = (2, 2, 2, 3, 3, 3),
-        decoder_layers_per_block: Tuple[int] = (3, 3, 3, 3, 3, 3),
+        encoder_layers_per_block: Tuple[int, ...] = (2, 2, 2, 3, 3, 3),
+        decoder_layers_per_block: Tuple[int, ...] = (3, 3, 3, 3, 3, 3),
         encoder_qkv_multiscales: Tuple[Tuple[int, ...], ...] = ((), (), (), (5,), (5,), (5,)),
         decoder_qkv_multiscales: Tuple[Tuple[int, ...], ...] = ((), (), (), (5,), (5,), (5,)),
         upsample_block_type: str = "pixel_shuffle",
@@ -609,7 +609,7 @@ class AutoencoderDC(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalModel
                 returned.
         """
         if self.use_slicing and z.size(0) > 1:
-            decoded_slices = [self._decode(z_slice)[0] for z_slice in z.split(1)]
+            decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
             decoded = mint.cat(decoded_slices)
         else:
             decoded = self._decode(z)

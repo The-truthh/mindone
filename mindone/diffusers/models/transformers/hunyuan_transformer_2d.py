@@ -22,8 +22,8 @@ from mindspore import mint, nn
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...utils import logging
 from ..activations import SiLU
-from ..attention import FeedForward
-from ..attention_processor import Attention, AttentionProcessor, HunyuanAttnProcessor2_0
+from ..attention import AttentionMixin, FeedForward
+from ..attention_processor import Attention, FusedHunyuanAttnProcessor2_0, HunyuanAttnProcessor2_0
 from ..embeddings import HunyuanCombinedTimestepTextSizeStyleEmbedding, PatchEmbed, PixArtAlphaTextProjection
 from ..modeling_outputs import Transformer2DModelOutput
 from ..modeling_utils import ModelMixin
@@ -198,7 +198,7 @@ class HunyuanDiTBlock(nn.Cell):
         return hidden_states
 
 
-class HunyuanDiT2DModel(ModelMixin, ConfigMixin):
+class HunyuanDiT2DModel(ModelMixin, AttentionMixin, ConfigMixin):
     """
     HunYuanDiT: Diffusion model with a Transformer backbone.
 
@@ -319,65 +319,37 @@ class HunyuanDiT2DModel(ModelMixin, ConfigMixin):
         self.norm_out = AdaLayerNormContinuous(self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out = mint.nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=True)
 
-    @property
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
-    def attn_processors(self) -> Dict[str, AttentionProcessor]:
-        r"""
-        Returns:
-            `dict` of attention processors: A dictionary containing all attention processors used in the model with
-            indexed by its weight name.
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.fuse_qkv_projections with FusedAttnProcessor2_0->FusedHunyuanAttnProcessor2_0
+    def fuse_qkv_projections(self):
         """
-        # set recursively
-        processors = {}
+        Enables fused QKV projections. For self-attention modules, all projection matrices (i.e., query, key, value)
+        are fused. For cross-attention modules, key and value projection matrices are fused.
 
-        def fn_recursive_add_processors(name: str, module: nn.Cell, processors: Dict[str, AttentionProcessor]):
-            if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor()
+        > [!WARNING] > This API is 🧪 experimental.
+        """
+        self.original_attn_processors = None
 
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
+        for _, attn_processor in self.attn_processors.items():
+            if "Added" in str(attn_processor.__class__.__name__):
+                raise ValueError("`fuse_qkv_projections()` is not supported for models having added KV projections.")
 
-            return processors
+        self.original_attn_processors = self.attn_processors
 
-        for name, module in self.name_cells().items():
-            fn_recursive_add_processors(name, module, processors)
+        for _, module in self.cells_and_names():
+            if isinstance(module, Attention):
+                module.fuse_projections(fuse=True)
 
-        return processors
+        self.set_attn_processor(FusedHunyuanAttnProcessor2_0())
 
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
-        r"""
-        Sets the attention processor to use to compute attention.
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.unfuse_qkv_projections
+    def unfuse_qkv_projections(self):
+        """Disables the fused QKV projection if enabled.
 
-        Parameters:
-            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
-                The instantiated processor class or a dictionary of processor classes that will be set as the processor
-                for **all** `Attention` layers.
-
-                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
-                processor. This is strongly recommended when setting trainable attention processors.
+        > [!WARNING] > This API is 🧪 experimental.
 
         """
-        count = len(self.attn_processors.keys())
-
-        if isinstance(processor, dict) and len(processor) != count:
-            raise ValueError(
-                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
-                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
-            )
-
-        def fn_recursive_attn_processor(name: str, module: nn.Cell, processor):
-            if hasattr(module, "set_processor"):
-                if not isinstance(processor, dict):
-                    module.set_processor(processor)
-                else:
-                    module.set_processor(processor.pop(f"{name}.processor"))
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
-
-        for name, module in self.name_cells().items():
-            fn_recursive_attn_processor(name, module, processor)
+        if self.original_attn_processors is not None:
+            self.set_attn_processor(self.original_attn_processors)
 
     def set_default_attn_processor(self):
         """

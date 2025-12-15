@@ -103,7 +103,6 @@ class CogVideoXCausalConv3d(nn.Cell):
         width_pad = (width_kernel_size - 1) // 2
 
         self.pad_mode = pad_mode
-
         self.height_pad = height_pad
         self.width_pad = width_pad
         self.time_pad = time_pad
@@ -931,19 +930,19 @@ class AutoencoderKLCogVideoX(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         self,
         in_channels: int = 3,
         out_channels: int = 3,
-        down_block_types: Tuple[str] = (
+        down_block_types: Tuple[str, ...] = (
             "CogVideoXDownBlock3D",
             "CogVideoXDownBlock3D",
             "CogVideoXDownBlock3D",
             "CogVideoXDownBlock3D",
         ),
-        up_block_types: Tuple[str] = (
+        up_block_types: Tuple[str, ...] = (
             "CogVideoXUpBlock3D",
             "CogVideoXUpBlock3D",
             "CogVideoXUpBlock3D",
             "CogVideoXUpBlock3D",
         ),
-        block_out_channels: Tuple[int] = (128, 256, 256, 512),
+        block_out_channels: Tuple[int, ...] = (128, 256, 256, 512),
         latent_channels: int = 16,
         layers_per_block: int = 3,
         act_fn: str = "silu",

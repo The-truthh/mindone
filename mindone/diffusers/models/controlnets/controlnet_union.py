@@ -22,10 +22,10 @@ from mindspore import mint, nn, ops
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders.single_file_model import FromOriginalModelMixin
 from ...utils import logging
+from ..attention import AttentionMixin
 from ..attention_processor import (
     ADDED_KV_ATTENTION_PROCESSORS,
     CROSS_ATTENTION_PROCESSORS,
-    AttentionProcessor,
     AttnAddedKVProcessor,
     AttnProcessor,
 )
@@ -81,7 +81,7 @@ class ResidualAttentionBlock(nn.Cell):
         return x
 
 
-class ControlNetUnionModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
+class ControlNetUnionModel(ModelMixin, AttentionMixin, ConfigMixin, FromOriginalModelMixin):
     """
     A ControlNetUnion model.
 
@@ -460,66 +460,6 @@ class ControlNetUnionModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         return controlnet
 
-    @property
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
-    def attn_processors(self) -> Dict[str, AttentionProcessor]:
-        r"""
-        Returns:
-            `dict` of attention processors: A dictionary containing all attention processors used in the model with
-            indexed by its weight name.
-        """
-        # set recursively
-        processors = {}
-
-        def fn_recursive_add_processors(name: str, module: nn.Cell, processors: Dict[str, AttentionProcessor]):
-            if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor()
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
-
-            return processors
-
-        for name, module in self.name_cells().items():
-            fn_recursive_add_processors(name, module, processors)
-
-        return processors
-
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
-        r"""
-        Sets the attention processor to use to compute attention.
-
-        Parameters:
-            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
-                The instantiated processor class or a dictionary of processor classes that will be set as the processor
-                for **all** `Attention` layers.
-
-                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
-                processor. This is strongly recommended when setting trainable attention processors.
-
-        """
-        count = len(self.attn_processors.keys())
-
-        if isinstance(processor, dict) and len(processor) != count:
-            raise ValueError(
-                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
-                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
-            )
-
-        def fn_recursive_attn_processor(name: str, module: nn.Cell, processor):
-            if hasattr(module, "set_processor"):
-                if not isinstance(processor, dict):
-                    module.set_processor(processor)
-                else:
-                    module.set_processor(processor.pop(f"{name}.processor"))
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
-
-        for name, module in self.name_cells().items():
-            fn_recursive_attn_processor(name, module, processor)
-
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_default_attn_processor
     def set_default_attn_processor(self):
         """
@@ -535,6 +475,72 @@ class ControlNetUnionModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             )
 
         self.set_attn_processor(processor)
+
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attention_slice
+    def set_attention_slice(self, slice_size: Union[str, int, List[int]]) -> None:
+        r"""
+        Enable sliced attention computation.
+
+        When this option is enabled, the attention module splits the input tensor in slices to compute attention in
+        several steps. This is useful for saving some memory in exchange for a small decrease in speed.
+
+        Args:
+            slice_size (`str` or `int` or `list(int)`, *optional*, defaults to `"auto"`):
+                When `"auto"`, input to the attention heads is halved, so attention is computed in two steps. If
+                `"max"`, maximum amount of memory is saved by running only one slice at a time. If a number is
+                provided, uses as many slices as `attention_head_dim // slice_size`. In this case, `attention_head_dim`
+                must be a multiple of `slice_size`.
+        """
+        sliceable_head_dims = []
+
+        def fn_recursive_retrieve_sliceable_dims(module: ms.nn.Cell):
+            if hasattr(module, "set_attention_slice"):
+                sliceable_head_dims.append(module.sliceable_head_dim)
+
+            for _, child in module.name_cells().items():
+                fn_recursive_retrieve_sliceable_dims(child)
+
+        # retrieve number of attention layers
+        for _, module in self.name_cells().items():
+            fn_recursive_retrieve_sliceable_dims(module)
+
+        num_sliceable_layers = len(sliceable_head_dims)
+
+        if slice_size == "auto":
+            # half the attention head size is usually a good trade-off between
+            # speed and memory
+            slice_size = [dim // 2 for dim in sliceable_head_dims]
+        elif slice_size == "max":
+            # make smallest slice possible
+            slice_size = num_sliceable_layers * [1]
+
+        slice_size = num_sliceable_layers * [slice_size] if not isinstance(slice_size, list) else slice_size
+
+        if len(slice_size) != len(sliceable_head_dims):
+            raise ValueError(
+                f"You have provided {len(slice_size)}, but {self.config} has {len(sliceable_head_dims)} different"
+                f" attention layers. Make sure to match `len(slice_size)` to be {len(sliceable_head_dims)}."
+            )
+
+        for i in range(len(slice_size)):
+            size = slice_size[i]
+            dim = sliceable_head_dims[i]
+            if size is not None and size > dim:
+                raise ValueError(f"size {size} has to be smaller or equal to {dim}.")
+
+        # Recursively walk through all the children.
+        # Any children which exposes the set_attention_slice method
+        # gets the message
+        def fn_recursive_set_attention_slice(module: ms.nn.Cell, slice_size: List[int]):
+            if hasattr(module, "set_attention_slice"):
+                module.set_attention_slice(slice_size.pop())
+
+            for _, child in module.name_cells().items():
+                fn_recursive_set_attention_slice(child, slice_size)
+
+        reversed_slice_size = list(reversed(slice_size))
+        for _, module in self.name_cells().items():
+            fn_recursive_set_attention_slice(module, reversed_slice_size)
 
     def construct(
         self,
@@ -558,28 +564,28 @@ class ControlNetUnionModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         The [`ControlNetUnionModel`] forward method.
 
         Args:
-            sample (`torch.Tensor`):
+            sample (`ms.Tensor`):
                 The noisy input tensor.
-            timestep (`Union[torch.Tensor, float, int]`):
+            timestep (`Union[ms.Tensor, float, int]`):
                 The number of timesteps to denoise an input.
-            encoder_hidden_states (`torch.Tensor`):
+            encoder_hidden_states (`ms.Tensor`):
                 The encoder hidden states.
-            controlnet_cond (`List[torch.Tensor]`):
+            controlnet_cond (`List[ms.Tensor]`):
                 The conditional input tensors.
-            control_type (`torch.Tensor`):
+            control_type (`ms.Tensor`):
                 A tensor of shape `(batch, num_control_type)` with values `0` or `1` depending on whether the control
                 type is used.
             control_type_idx (`List[int]`):
                 The indices of `control_type`.
             conditioning_scale (`float`, defaults to `1.0`):
                 The scale factor for ControlNet outputs.
-            class_labels (`torch.Tensor`, *optional*, defaults to `None`):
+            class_labels (`ms.Tensor`, *optional*, defaults to `None`):
                 Optional class labels for conditioning. Their embeddings will be summed with the timestep embeddings.
-            timestep_cond (`torch.Tensor`, *optional*, defaults to `None`):
+            timestep_cond (`ms.Tensor`, *optional*, defaults to `None`):
                 Additional conditional embeddings for timestep. If provided, the embeddings will be summed with the
                 timestep_embedding passed through the `self.time_embedding` layer to obtain the final timestep
                 embeddings.
-            attention_mask (`torch.Tensor`, *optional*, defaults to `None`):
+            attention_mask (`ms.Tensor`, *optional*, defaults to `None`):
                 An attention mask of shape `(batch, key_tokens)` is applied to `encoder_hidden_states`. If `1` the mask
                 is kept, otherwise if `0` it is discarded. Mask will be converted into a bias, which adds large
                 negative values to the attention scores corresponding to "discard" tokens.

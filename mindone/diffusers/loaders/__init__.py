@@ -73,13 +73,15 @@ _import_structure = {
         "CogView4LoraLoaderMixin",
         "Mochi1LoraLoaderMixin",
         "HunyuanVideoLoraLoaderMixin",
-        "QwenImageLoraLoaderMixin",
         "SanaLoraLoaderMixin",
         "Lumina2LoraLoaderMixin",
         "WanLoraLoaderMixin",
         "KandinskyLoraLoaderMixin",
         "HiDreamImageLoraLoaderMixin",
         "SkyReelsV2LoraLoaderMixin",
+        "QwenImageLoraLoaderMixin",
+        # "ZImageLoraLoaderMixin",
+        # "Flux2LoraLoaderMixin",
     ],
     "peft": ["PeftAdapterMixin"],
     "single_file": ["FromSingleFileMixin"],
@@ -95,6 +97,7 @@ if TYPE_CHECKING:
         AuraFlowLoraLoaderMixin,
         CogVideoXLoraLoaderMixin,
         CogView4LoraLoaderMixin,
+        # Flux2LoraLoaderMixin,
         FluxLoraLoaderMixin,
         HiDreamImageLoraLoaderMixin,
         HunyuanVideoLoraLoaderMixin,
@@ -110,6 +113,7 @@ if TYPE_CHECKING:
         StableDiffusionLoraLoaderMixin,
         StableDiffusionXLLoraLoaderMixin,
         WanLoraLoaderMixin,
+        # ZImageLoraLoaderMixin,
     )
     from .peft import PeftAdapterMixin
     from .single_file import FromSingleFileMixin

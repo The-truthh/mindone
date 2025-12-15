@@ -327,13 +327,17 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid, output_type="np"):
     return emb
 
 
-def get_1d_sincos_pos_embed_from_grid(embed_dim, pos, output_type="np", flip_sin_to_cos=False):
+def get_1d_sincos_pos_embed_from_grid(embed_dim, pos, output_type="np", flip_sin_to_cos=False, dtype=None):
     """
     This function generates 1D positional embeddings from a grid.
 
     Args:
         embed_dim (`int`): The embedding dimension `D`
         pos (`ms.Tensor`): 1D tensor of positions with shape `(M,)`
+        output_type (`str`, *optional*, defaults to `"np"`): Output type. Use `"ms"` for MindSpore tensors.
+        flip_sin_to_cos (`bool`, *optional*, defaults to `False`): Whether to flip sine and cosine embeddings.
+        dtype (`ms.Type`, *optional*): Data type for frequency calculations. If `None`, defaults to
+            `ms.float64` on the devices.
 
     Returns:
         `ms.Tensor`: Sinusoidal positional embeddings of shape `(M, D)`.
@@ -349,7 +353,11 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos, output_type="np", flip_sin
     if embed_dim % 2 != 0:
         raise ValueError("embed_dim must be divisible by 2")
 
-    omega = mint.arange(embed_dim // 2, dtype=ms.float64)
+    # Auto-detect appropriate dtype if not specified
+    if dtype is None:
+        dtype = ms.float64
+
+    omega = mint.arange(embed_dim // 2, dtype=dtype)
     omega /= embed_dim / 2.0
     omega = 1.0 / 10000**omega  # (D/2,)
 

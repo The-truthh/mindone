@@ -20,6 +20,7 @@ import functools
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import mindspore as ms
 from mindspore import mint, nn, ops
 
@@ -178,7 +179,6 @@ class QwenEmbedRope(nn.Cell):
             ],
             dim=1,
         )
-        self.rope_cache = {}
 
         # DO NOT USING REGISTER BUFFER HERE, IT WILL CAUSE COMPLEX NUMBERS LOSE ITS IMAGINARY PART
         self.scale_rope = scale_rope
@@ -193,14 +193,20 @@ class QwenEmbedRope(nn.Cell):
         freqs = mint.polar(mint.ones_like(freqs), freqs)
         return freqs
 
-    def construct(self, video_fhw, txt_seq_lens):
+    def construct(
+        self,
+        video_fhw: Union[Tuple[int, int, int], List[Tuple[int, int, int]]],
+        txt_seq_lens: List[int],
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
         """
-        Args: video_fhw: [frame, height, width] a list of 3 integers representing the shape of the video Args:
-        txt_length: [bs] a list of 1 integers representing the length of the text
+        Args:
+            video_fhw (`Tuple[int, int, int]` or `List[Tuple[int, int, int]]`):
+                A list of 3 integers [frame, height, width] representing the shape of the video.
+            txt_seq_lens (`List[int]`):
+                A list of integers of length batch_size representing the length of each text prompt.
         """
         if isinstance(video_fhw, list):
             video_fhw = video_fhw[0]
-
         if not isinstance(video_fhw, list):
             video_fhw = [video_fhw]
 
@@ -208,7 +214,8 @@ class QwenEmbedRope(nn.Cell):
         max_vid_index = 0
         for idx, fhw in enumerate(video_fhw):
             frame, height, width = fhw
-            video_freq = self._compute_video_freqs(frame, height, width)
+            # RoPE frequencies are cached via a lru_cache decorator on _compute_video_freqs
+            video_freq = self._compute_video_freqs(frame, height, width, idx)
             vid_freqs.append(video_freq)
 
             if self.scale_rope:
@@ -222,8 +229,8 @@ class QwenEmbedRope(nn.Cell):
 
         return vid_freqs, txt_freqs
 
-    @functools.lru_cache(maxsize=None)
-    def _compute_video_freqs(self, frame, height, width, idx=0):
+    @functools.lru_cache(maxsize=128)
+    def _compute_video_freqs(self, frame: int, height: int, width: int, idx: int = 0) -> ms.Tensor:
         seq_lens = frame * height * width
         freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
         freqs_neg = self.neg_freqs.split([x // 2 for x in self.axes_dim], dim=1)

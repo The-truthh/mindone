@@ -640,6 +640,7 @@ class WanEncoder3d(nn.Cell):
             feat_idx[0] += 1
         else:
             x = self.conv_out(x)
+
         return x
 
 
@@ -982,6 +983,7 @@ class AutoencoderKLWan(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalMo
     """
 
     _supports_gradient_checkpointing = False
+    _group_offload_block_modules = ["quant_conv", "post_quant_conv", "encoder", "decoder"]
     # keys toignore when AlignDeviceHook moves inputs/outputs between devices
     # these are shared mutable state modified in-place
     _skip_keys = ["feat_cache", "feat_idx"]
@@ -1282,14 +1284,20 @@ class AutoencoderKLWan(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalMo
             `ms.Tensor`:
                 The latent representation of the encoded videos.
         """
-        _, _, num_frames, height, width = x.shape
-        latent_height = height // self.spatial_compression_ratio
-        latent_width = width // self.spatial_compression_ratio
 
-        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
-        tile_latent_stride_height = self.tile_sample_stride_height // self.spatial_compression_ratio
-        tile_latent_stride_width = self.tile_sample_stride_width // self.spatial_compression_ratio
+        _, _, num_frames, height, width = x.shape
+        encode_spatial_compression_ratio = self.spatial_compression_ratio
+        if self.config.patch_size is not None:
+            assert encode_spatial_compression_ratio % self.config.patch_size == 0
+            encode_spatial_compression_ratio = self.spatial_compression_ratio // self.config.patch_size
+
+        latent_height = height // encode_spatial_compression_ratio
+        latent_width = width // encode_spatial_compression_ratio
+
+        tile_latent_min_height = self.tile_sample_min_height // encode_spatial_compression_ratio
+        tile_latent_min_width = self.tile_sample_min_width // encode_spatial_compression_ratio
+        tile_latent_stride_height = self.tile_sample_stride_height // encode_spatial_compression_ratio
+        tile_latent_stride_width = self.tile_sample_stride_width // encode_spatial_compression_ratio
 
         blend_height = tile_latent_min_height - tile_latent_stride_height
         blend_width = tile_latent_min_width - tile_latent_stride_width
@@ -1431,6 +1439,7 @@ class AutoencoderKLWan(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalMo
         """
         x = sample
         posterior = self.encode(x)[0]
+
         if sample_posterior:
             z = self.diag_gauss_dist.sample(posterior, generator=generator)
         else:

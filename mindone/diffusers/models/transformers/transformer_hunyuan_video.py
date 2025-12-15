@@ -25,8 +25,9 @@ from mindone.diffusers.loaders import FromOriginalModelMixin
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import PeftAdapterMixin
 from ...utils import logging
-from ..attention import FeedForward
-from ..attention_processor import Attention, AttentionProcessor
+from ..attention import AttentionMixin, FeedForward
+from ..attention_dispatch import dispatch_attention_fn
+from ..attention_processor import Attention
 from ..cache_utils import CacheMixin
 from ..embeddings import (
     CombinedTimestepTextProjEmbeddings,
@@ -45,6 +46,9 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class HunyuanVideoAttnProcessor2_0:
+    _attention_backend = None
+    _parallel_config = None
+
     def __call__(
         self,
         attn: Attention,
@@ -61,9 +65,9 @@ class HunyuanVideoAttnProcessor2_0:
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
 
-        query = mint.transpose(unflatten(query, 2, (attn.heads, -1)), 1, 2)
-        key = mint.transpose(unflatten(key, 2, (attn.heads, -1)), 1, 2)
-        value = mint.transpose(unflatten(value, 2, (attn.heads, -1)), 1, 2)
+        query = unflatten(query, 2, (attn.heads, -1))
+        key = unflatten(key, 2, (attn.heads, -1))
+        value = unflatten(value, 2, (attn.heads, -1))
 
         # 2. QK normalization
         if attn.norm_q is not None:
@@ -76,21 +80,29 @@ class HunyuanVideoAttnProcessor2_0:
             if attn.add_q_proj is None and encoder_hidden_states is not None:
                 query = mint.cat(
                     [
-                        apply_rotary_emb(query[:, :, : -encoder_hidden_states.shape[1]], image_rotary_emb),
-                        query[:, :, -encoder_hidden_states.shape[1] :],
+                        apply_rotary_emb(
+                            query[:, : -encoder_hidden_states.shape[1]],
+                            image_rotary_emb,
+                            sequence_dim=1,
+                        ),
+                        query[:, -encoder_hidden_states.shape[1] :],
                     ],
-                    dim=2,
+                    dim=1,
                 )
                 key = mint.cat(
                     [
-                        apply_rotary_emb(key[:, :, : -encoder_hidden_states.shape[1]], image_rotary_emb),
-                        key[:, :, -encoder_hidden_states.shape[1] :],
+                        apply_rotary_emb(
+                            key[:, : -encoder_hidden_states.shape[1]],
+                            image_rotary_emb,
+                            sequence_dim=1,
+                        ),
+                        key[:, -encoder_hidden_states.shape[1] :],
                     ],
-                    dim=2,
+                    dim=1,
                 )
             else:
-                query = apply_rotary_emb(query, image_rotary_emb)
-                key = apply_rotary_emb(key, image_rotary_emb)
+                query = apply_rotary_emb(query, image_rotary_emb, sequence_dim=1)
+                key = apply_rotary_emb(key, image_rotary_emb, sequence_dim=1)
 
         # 4. Encoder condition QKV projection and normalization
         if attn.add_q_proj is not None and encoder_hidden_states is not None:
@@ -98,24 +110,31 @@ class HunyuanVideoAttnProcessor2_0:
             encoder_key = attn.add_k_proj(encoder_hidden_states)
             encoder_value = attn.add_v_proj(encoder_hidden_states)
 
-            encoder_query = unflatten(encoder_query, 2, (attn.heads, -1)).swapaxes(1, 2)
-            encoder_key = unflatten(encoder_key, 2, (attn.heads, -1)).swapaxes(1, 2)
-            encoder_value = unflatten(encoder_value, 2, (attn.heads, -1)).swapaxes(1, 2)
+            encoder_query = unflatten(encoder_query, 2, (attn.heads, -1))
+            encoder_key = unflatten(encoder_key, 2, (attn.heads, -1))
+            encoder_value = unflatten(encoder_value, 2, (attn.heads, -1))
 
             if attn.norm_added_q is not None:
                 encoder_query = attn.norm_added_q(encoder_query)
             if attn.norm_added_k is not None:
                 encoder_key = attn.norm_added_k(encoder_key)
 
-            query = mint.cat([query, encoder_query], dim=2)
-            key = mint.cat([key, encoder_key], dim=2)
-            value = mint.cat([value, encoder_value], dim=2)
+            query = mint.cat([query, encoder_query], dim=1)
+            key = mint.cat([key, encoder_key], dim=1)
+            value = mint.cat([value, encoder_value], dim=1)
 
         # 5. Attention
-        hidden_states = attn.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        hidden_states = dispatch_attention_fn(
+            query,
+            key,
+            value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+            backend=self._attention_backend,
+            parallel_config=self._parallel_config,
         )
-        hidden_states = hidden_states.swapaxes(1, 2).flatten(2, 3)
+        hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.to(query.dtype)
 
         # 6. Output projection
@@ -522,7 +541,7 @@ class HunyuanVideoSingleTransformerBlock(nn.Cell):
         image_rotary_emb: Optional[Tuple[ms.Tensor, ms.Tensor]] = None,
         *args,
         **kwargs,
-    ) -> ms.Tensor:
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
         text_seq_length = encoder_hidden_states.shape[1]
         hidden_states = mint.cat([hidden_states, encoder_hidden_states], dim=1)
 
@@ -677,7 +696,7 @@ class HunyuanVideoTokenReplaceSingleTransformerBlock(nn.Cell):
         image_rotary_emb: Optional[Tuple[ms.Tensor, ms.Tensor]] = None,
         token_replace_emb: ms.Tensor = None,
         num_tokens: int = None,
-    ) -> ms.Tensor:
+    ) -> Tuple[ms.Tensor, ms.Tensor]:
         text_seq_length = encoder_hidden_states.shape[1]
         hidden_states = mint.cat([hidden_states, encoder_hidden_states], dim=1)
 
@@ -812,7 +831,9 @@ class HunyuanVideoTokenReplaceTransformerBlock(nn.Cell):
         return hidden_states, encoder_hidden_states
 
 
-class HunyuanVideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin):
+class HunyuanVideoTransformer3DModel(
+    ModelMixin, AttentionMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin
+):
     r"""
     A Transformer model for video-like data used in [HunyuanVideo](https://huggingface.co/tencent/HunyuanVideo).
 
@@ -888,7 +909,7 @@ class HunyuanVideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, 
         text_embed_dim: int = 4096,
         pooled_projection_dim: int = 768,
         rope_theta: float = 256.0,
-        rope_axes_dim: Tuple[int] = (16, 56, 56),
+        rope_axes_dim: Tuple[int, ...] = (16, 56, 56),
         image_condition_type: Optional[str] = None,
     ) -> None:
         super().__init__()
@@ -963,66 +984,6 @@ class HunyuanVideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, 
 
         self.config_patch_size = self.config.patch_size
         self.config_patch_size_t = self.config.patch_size_t
-
-    @property
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
-    def attn_processors(self) -> Dict[str, AttentionProcessor]:
-        r"""
-        Returns:
-            `dict` of attention processors: A dictionary containing all attention processors used in the model with
-            indexed by its weight name.
-        """
-        # set recursively
-        processors = {}
-
-        def fn_recursive_add_processors(name: str, module: nn.Cell, processors: Dict[str, AttentionProcessor]):
-            if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor()
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
-
-            return processors
-
-        for name, module in self.name_cells().items():
-            fn_recursive_add_processors(name, module, processors)
-
-        return processors
-
-    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
-        r"""
-        Sets the attention processor to use to compute attention.
-
-        Parameters:
-            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
-                The instantiated processor class or a dictionary of processor classes that will be set as the processor
-                for **all** `Attention` layers.
-
-                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
-                processor. This is strongly recommended when setting trainable attention processors.
-
-        """
-        count = len(self.attn_processors.keys())
-
-        if isinstance(processor, dict) and len(processor) != count:
-            raise ValueError(
-                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
-                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
-            )
-
-        def fn_recursive_attn_processor(name: str, module: nn.Cell, processor):
-            if hasattr(module, "set_processor"):
-                if not isinstance(processor, dict):
-                    module.set_processor(processor)
-                else:
-                    module.set_processor(processor.pop(f"{name}.processor"))
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
-
-        for name, module in self.name_cells().items():
-            fn_recursive_attn_processor(name, module, processor)
 
     def construct(
         self,

@@ -185,6 +185,7 @@ class ModelMixin(nn.Cell, PushToHubMixin):
     _repeated_blocks = []
     _parallel_config = None
     _cp_plan = None
+    _skip_keys = None
 
     def __init__(self):
         super().__init__()
@@ -322,12 +323,8 @@ class ModelMixin(nn.Cell, PushToHubMixin):
         When this option is enabled, you should observe lower GPU memory usage and a potential speed up during
         inference. Speed up during training is not guaranteed.
 
-        <Tip warning={true}>
-
-        ⚠️ When memory efficient attention and sliced attention are both enabled, memory efficient attention takes
-        precedent.
-
-        </Tip>
+        > [!WARNING] > ⚠️ When memory efficient attention and sliced attention are both enabled, memory efficient
+        attention takes > precedent.
 
         Parameters:
             attention_op (`Callable`, *optional*):
@@ -415,6 +412,9 @@ class ModelMixin(nn.Cell, PushToHubMixin):
         use_stream: bool = False,
         record_stream: bool = False,
         low_cpu_mem_usage=False,
+        offload_to_disk_path: Optional[str] = None,
+        block_modules: Optional[str] = None,
+        exclude_kwargs: Optional[str] = None,
     ) -> None:
         r"""
         Activates group offloading for the current model.
@@ -452,9 +452,10 @@ class ModelMixin(nn.Cell, PushToHubMixin):
                 attention as backend.
         """
         from .attention import AttentionModuleMixin
-        from .attention_dispatch import (  # _maybe_download_kernel_for_backend,
+        from .attention_dispatch import (
             AttentionBackendName,
             _check_attention_backend_requirements,
+            # _maybe_download_kernel_for_backend,
         )
 
         # TODO: the following will not be required when everything is refactored to AttentionModuleMixin
@@ -700,28 +701,24 @@ class ModelMixin(nn.Cell, PushToHubMixin):
                 Whether to disable mmap when loading a Safetensors model. This option can perform better when the model
                 is on a network mount or hard drive, which may not handle the seeky-ness of mmap very well.
 
-        <Tip>
-
-        To use private or [gated models](https://huggingface.co/docs/hub/models-gated#gated-models), log-in with `hf
-        auth login`. You can also activate the special
-        ["offline-mode"](https://huggingface.co/diffusers/installation.html#offline-mode) to use this method in a
+        > [!TIP] > To use private or [gated models](https://huggingface.co/docs/hub/models-gated#gated-models), log-in
+        with `hf > auth login`. You can also activate the special >
+        ["offline-mode"](https://huggingface.co/diffusers/installation.html#offline-mode) to use this method in a >
         firewalled environment.
-
-        </Tip>
 
         Example:
 
         ```py
         from mindone.diffusers import UNet2DConditionModel
 
-        unet = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet")
+        unet = UNet2DConditionModel.from_pretrained("stable-diffusion-v1-5/stable-diffusion-v1-5", subfolder="unet")
         ```
 
         If you get the error message below, you need to finetune the weights for your downstream task:
 
         ```bash
         Some weights of UNet2DConditionModel were not initialized from the model checkpoint at
-        runwayml/stable-diffusion-v1-5 and are newly initialized because the shapes did not match:
+        stable-diffusion-v1-5/stable-diffusion-v1-5 and are newly initialized because the shapes did not match:
         - conv_in.weight: found shape torch.Size([320, 4, 3, 3]) in the checkpoint and torch.Size([320, 9, 3, 3]) in the model instantiated
         You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
         ```
@@ -1028,19 +1025,20 @@ class ModelMixin(nn.Cell, PushToHubMixin):
         config: Union[ParallelConfig, ContextParallelConfig],
         cp_plan: Optional[Dict[str, ContextParallelModelPlan]] = None,
     ):
-        from ..hooks.context_parallel import apply_context_parallel
-        from .attention import AttentionModuleMixin
-        from .attention_processor import Attention, MochiAttention
-
         logger.warning(
             "`enable_parallelism` is an experimental feature. The API may change in the future and breaking changes may be introduced at any time without warning."  # noqa
         )
 
-        if isinstance(config, ContextParallelConfig):
-            config = ParallelConfig(context_parallel_config=config)
-
         if not mint.distributed.is_initialized():
             raise RuntimeError("mint.distributed must be initialized before calling `enable_parallelism`.")
+
+        from ..hooks.context_parallel import apply_context_parallel
+        from .attention import AttentionModuleMixin
+        from .attention_dispatch import AttentionBackendName, _AttentionBackendRegistry
+        from .attention_processor import Attention, MochiAttention
+
+        if isinstance(config, ContextParallelConfig):
+            config = ParallelConfig(context_parallel_config=config)
 
         rank = mint.distributed.get_rank()
         world_size = mint.distributed.get_world_size()
@@ -1048,39 +1046,48 @@ class ModelMixin(nn.Cell, PushToHubMixin):
         rank = mint.distributed.get_rank()
         device = ms.get_current_device()
 
-        cp_mesh = None
+        attention_classes = (Attention, MochiAttention, AttentionModuleMixin)
+
+        if config.context_parallel_config is not None:
+            for _, module in self.cells_and_names():
+                if not isinstance(module, attention_classes):
+                    continue
+
+                processor = module.processor
+                if processor is None or not hasattr(processor, "_attention_backend"):
+                    continue
+
+                attention_backend = processor._attention_backend
+                if attention_backend is None:
+                    attention_backend, _ = _AttentionBackendRegistry.get_active_backend()
+                else:
+                    attention_backend = AttentionBackendName(attention_backend)
+
+                if not _AttentionBackendRegistry._is_context_parallel_available(attention_backend):
+                    compatible_backends = sorted(_AttentionBackendRegistry._supports_context_parallel)
+                    raise ValueError(
+                        f"Context parallelism is enabled but the attention processor '{processor.__class__.__name__}' "
+                        f"is using backend '{attention_backend.value}' which does not support context parallelism. "
+                        f"Please set a compatible attention backend: {compatible_backends} using `model.set_attention_backend()` before "
+                        f"calling `enable_parallelism()`."
+                    )
+
+                # All modules use the same attention processor and backend. We don't need to
+                # iterate over all modules after checking the first processor
+                break
+
+        mesh = None
         if config.context_parallel_config is not None:
             cp_config = config.context_parallel_config
-            if cp_config.ring_degree < 1 or cp_config.ulysses_degree < 1:
-                raise ValueError("`ring_degree` and `ulysses_degree` must be greater than or equal to 1.")
-            if cp_config.ring_degree > 1 and cp_config.ulysses_degree > 1:
-                raise ValueError(
-                    "Unified Ulysses-Ring attention is not yet supported. Please set either `ring_degree` or `ulysses_degree` to 1."
-                )
-            if cp_config.ring_degree * cp_config.ulysses_degree > world_size:
-                raise ValueError(
-                    f"The product of `ring_degree` ({cp_config.ring_degree}) and `ulysses_degree` ({cp_config.ulysses_degree}) must not exceed the world size ({world_size})."  # noqa
-                )
-            cp_mesh = DeviceMesh(
+            mesh = DeviceMesh(
                 device_type=device_type,
-                mesh_shape=(cp_config.ring_degree, cp_config.ulysses_degree),
-                mesh_dim_names=("ring", "ulysses"),
+                mesh_shape=cp_config.mesh_shape,
+                mesh_dim_names=cp_config.mesh_dim_names,
             )
 
-        config.setup(rank, world_size, device, cp_mesh=cp_mesh)
-
-        if cp_plan is None and self._cp_plan is None:
-            raise ValueError(
-                "`cp_plan` must be provided either as an argument or set in the model's `_cp_plan` attribute."
-            )
-        cp_plan = cp_plan if cp_plan is not None else self._cp_plan
-
-        if config.context_parallel_config is not None:
-            apply_context_parallel(self, config.context_parallel_config, cp_plan)
-
+        config.setup(rank, world_size, device, mesh=mesh)
         self._parallel_config = config
 
-        attention_classes = (Attention, MochiAttention, AttentionModuleMixin)
         for _, module in self.cells_and_names():
             if not isinstance(module, attention_classes):
                 continue
@@ -1088,6 +1095,14 @@ class ModelMixin(nn.Cell, PushToHubMixin):
             if processor is None or not hasattr(processor, "_parallel_config"):
                 continue
             processor._parallel_config = config
+
+        if config.context_parallel_config is not None:
+            if cp_plan is None and self._cp_plan is None:
+                raise ValueError(
+                    "`cp_plan` must be provided either as an argument or set in the model's `_cp_plan` attribute."
+                )
+            cp_plan = cp_plan if cp_plan is not None else self._cp_plan
+            apply_context_parallel(self, config.context_parallel_config, cp_plan)
 
     @classmethod
     def _load_pretrained_model(
@@ -1282,7 +1297,7 @@ class ModelMixin(nn.Cell, PushToHubMixin):
         ```py
         from mindone.diffusers import UNet2DConditionModel
 
-        model_id = "runwayml/stable-diffusion-v1-5"
+        model_id = "stable-diffusion-v1-5/stable-diffusion-v1-5"
         unet = UNet2DConditionModel.from_pretrained(model_id, subfolder="unet")
         unet.num_parameters(only_trainable=True)
         859520964
