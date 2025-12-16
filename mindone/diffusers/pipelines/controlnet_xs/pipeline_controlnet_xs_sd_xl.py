@@ -31,7 +31,7 @@ from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import FromSingleFileMixin, StableDiffusionXLLoraLoaderMixin, TextualInversionLoaderMixin
 from ...models import AutoencoderKL, ControlNetXSAdapter, UNet2DConditionModel, UNetControlNetXSModel
 from ...schedulers import KarrasDiffusionSchedulers
-from ...utils import is_invisible_watermark_available, logging, scale_lora_layers, unscale_lora_layers
+from ...utils import deprecate, is_invisible_watermark_available, logging, scale_lora_layers, unscale_lora_layers
 from ...utils.mindspore_utils import randn_tensor
 from ..pipeline_utils import DeprecatedPipelineMixin, DiffusionPipeline
 from ..stable_diffusion_xl.pipeline_output import StableDiffusionXLPipelineOutput
@@ -643,7 +643,13 @@ class StableDiffusionXLControlNetXSPipeline(
         add_time_ids = ms.tensor([add_time_ids], dtype=dtype)
         return add_time_ids
 
+    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_upscale.StableDiffusionUpscalePipeline.upcast_vae
     def upcast_vae(self):
+        deprecate(
+            "upcast_vae",
+            "1.0.0",
+            "`upcast_vae` is deprecated. Please use `pipe.vae.to(ms.float32)`.",
+        )
         self.vae.to(dtype=ms.float32)
 
     @property

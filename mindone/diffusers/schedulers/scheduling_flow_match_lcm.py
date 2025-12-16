@@ -172,7 +172,7 @@ class FlowMatchLCMScheduler(SchedulerMixin, ConfigMixin):
         Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
 
         Args:
-            begin_index (`int`):
+            begin_index (`int`, defaults to `0`):
                 The begin index for the scheduler.
         """
         self._begin_index = begin_index
@@ -462,7 +462,20 @@ class FlowMatchLCMScheduler(SchedulerMixin, ConfigMixin):
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_karras
     def _convert_to_karras(self, in_sigmas: ms.Tensor, num_inference_steps) -> ms.Tensor:
-        """Constructs the noise schedule of Karras et al. (2022)."""
+        """
+        Construct the noise schedule as proposed in [Elucidating the Design Space of Diffusion-Based Generative
+        Models](https://huggingface.co/papers/2206.00364).
+
+        Args:
+            in_sigmas (`ms.Tensor`):
+                The input sigma values to be converted.
+            num_inference_steps (`int`):
+                The number of inference steps to generate the noise schedule for.
+
+        Returns:
+            `ms.Tensor`:
+                The converted sigma values following the Karras noise schedule.
+        """
 
         # Hack to make sure that other schedulers which copy this function don't break
         # TODO: Add this logic to the other schedulers
@@ -488,7 +501,19 @@ class FlowMatchLCMScheduler(SchedulerMixin, ConfigMixin):
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_exponential
     def _convert_to_exponential(self, in_sigmas: ms.Tensor, num_inference_steps: int) -> ms.Tensor:
-        """Constructs an exponential noise schedule."""
+        """
+        Construct an exponential noise schedule.
+
+        Args:
+            in_sigmas (`ms.Tensor`):
+                The input sigma values to be converted.
+            num_inference_steps (`int`):
+                The number of inference steps to generate the noise schedule for.
+
+        Returns:
+            `ms.Tensor`:
+                The converted sigma values following an exponential schedule.
+        """
 
         # Hack to make sure that other schedulers which copy this function don't break
         # TODO: Add this logic to the other schedulers
@@ -512,7 +537,24 @@ class FlowMatchLCMScheduler(SchedulerMixin, ConfigMixin):
     def _convert_to_beta(
         self, in_sigmas: ms.Tensor, num_inference_steps: int, alpha: float = 0.6, beta: float = 0.6
     ) -> ms.Tensor:
-        """From "Beta Sampling is All You Need" [arXiv:2407.12173] (Lee et. al, 2024)"""
+        """
+        Construct a beta noise schedule as proposed in [Beta Sampling is All You
+        Need](https://huggingface.co/papers/2407.12173).
+
+        Args:
+            in_sigmas (`ms.Tensor`):
+                The input sigma values to be converted.
+            num_inference_steps (`int`):
+                The number of inference steps to generate the noise schedule for.
+            alpha (`float`, *optional*, defaults to `0.6`):
+                The alpha parameter for the beta distribution.
+            beta (`float`, *optional*, defaults to `0.6`):
+                The beta parameter for the beta distribution.
+
+        Returns:
+            `ms.Tensor`:
+                The converted sigma values following a beta distribution schedule.
+        """
 
         # Hack to make sure that other schedulers which copy this function don't break
         # TODO: Add this logic to the other schedulers

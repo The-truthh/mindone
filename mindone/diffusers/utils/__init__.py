@@ -33,7 +33,7 @@ from .constants import (
     WEIGHTS_INDEX_NAME,
     WEIGHTS_NAME,
 )
-from .deprecation_utils import deprecate
+from .deprecation_utils import _maybe_remap_transformers_class, deprecate
 from .dynamic_modules_utils import get_class_from_dynamic_module
 from .export_utils import export_to_gif, export_to_obj, export_to_ply, export_to_video
 from .hub_utils import (
@@ -47,6 +47,8 @@ from .hub_utils import (
 from .import_utils import (
     BACKENDS_MAPPING,
     _LazyModule,
+    is_aiter_available,
+    is_aiter_version,
     is_bs4_available,
     is_ftfy_available,
     is_hf_hub_version,

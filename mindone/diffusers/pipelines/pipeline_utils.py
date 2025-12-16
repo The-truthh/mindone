@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, get_args, get_origin
 
+import httpx
 import numpy as np
 import PIL.Image
 import requests
@@ -36,9 +37,8 @@ from huggingface_hub import (
     read_dduf_file,
     snapshot_download,
 )
-from huggingface_hub.utils import OfflineModeIsEnabled, validate_hf_hub_args
+from huggingface_hub.utils import HfHubHTTPError, OfflineModeIsEnabled, validate_hf_hub_args
 from packaging import version
-from requests.exceptions import HTTPError
 from tqdm.auto import tqdm
 from typing_extensions import Self
 
@@ -56,6 +56,7 @@ from ..utils import (
     PushToHubMixin,
     _get_detailed_type,
     _is_valid_type,
+    deprecate,
     logging,
     maybe_import_module_in_mindone,
     numpy_to_pil,
@@ -332,14 +333,11 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
 
     def to(self, dtype) -> Self:
         r"""
-        Performs Pipeline dtype conversion. A ms.dtype inferred from the argument of `self.to(dtype).`
+        Performs Pipeline dtype and/or device conversion. A torch.dtype and torch.device are inferred from the
+        arguments of `self.to(*args, **kwargs).`
 
-        <Tip>
-
-            If the pipeline already has the correct ms.dtype, then it is returned as is. Otherwise,
-            the returned pipeline is a copy of self with the desired ms.dtype.
-
-        </Tip>
+        > [!TIP] > If the pipeline already has the correct torch.dtype and torch.device, then it is returned as is.
+        Otherwise, > the returned pipeline is a copy of self with the desired torch.dtype and torch.device.
 
 
         Here are the ways to call `to`:
@@ -410,11 +408,7 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
                 `mindspore.float32` is used.
             custom_pipeline (`str`, *optional*):
 
-                <Tip warning={true}>
-
-                🧪 This is an experimental feature and may change in the future.
-
-                </Tip>
+                > [!WARNING] > 🧪 This is an experimental feature and may change in the future.
 
                 Can be either:
 
@@ -480,12 +474,8 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
             dduf_file(`str`, *optional*):
                 Load weights from the specified dduf file.
 
-        <Tip>
-
-        To use private or [gated](https://huggingface.co/docs/hub/models-gated#gated-models) models, log-in with `hf
-        auth login`.
-
-        </Tip>
+        > [!TIP] > To use private or [gated](https://huggingface.co/docs/hub/models-gated#gated-models) models, log-in
+        with `hf > auth login`.
 
         Examples:
 
@@ -855,11 +845,7 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
                     - A path to a *directory* (`./my_pipeline_directory/`) containing a custom pipeline. The directory
                       must contain a file called `pipeline.py` that defines the custom pipeline.
 
-                <Tip warning={true}>
-
-                🧪 This is an experimental feature and may change in the future.
-
-                </Tip>
+                > [!WARNING] > 🧪 This is an experimental feature and may change in the future.
 
                 For more information on how to load and create custom pipelines, take a look at [How to contribute a
                 community pipeline](https://huggingface.co/docs/diffusers/main/en/using-diffusers/contribute_pipeline).
@@ -913,12 +899,8 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
             `os.PathLike`:
                 A path to the downloaded pipeline.
 
-        <Tip>
-
-        To use private or [gated models](https://huggingface.co/docs/hub/models-gated#gated-models), log-in with `hf
-        auth login
-
-        </Tip>
+        > [!TIP] > To use private or [gated models](https://huggingface.co/docs/hub/models-gated#gated-models), log-in
+        with `hf > auth login
 
         """
         cache_dir = kwargs.pop("cache_dir", None)
@@ -963,7 +945,7 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
         if not local_files_only:
             try:
                 info = model_info(pretrained_model_name, token=token, revision=revision)
-            except (HTTPError, OfflineModeIsEnabled, requests.ConnectionError) as e:
+            except (HfHubHTTPError, OfflineModeIsEnabled, requests.ConnectionError, httpx.NetworkError) as e:
                 logger.warning(f"Couldn't connect to the Hub: {e}.\nWill try to load from local cache.")
                 local_files_only = True
                 model_info_call_error = e  # save error to reraise it if model is not cached locally
@@ -1193,6 +1175,36 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
         return signature_types
 
     @property
+    def parameters(self) -> Dict[str, Any]:
+        r"""
+        The `self.parameters` property can be useful to run different pipelines with the same weights and
+        configurations without reallocating additional memory.
+
+        Returns (`dict`):
+            A dictionary containing all the optional parameters needed to initialize the pipeline.
+
+        Examples:
+
+        ```py
+        >>> from mindone.diffusers import (
+        ...     StableDiffusionPipeline,
+        ...     StableDiffusionImg2ImgPipeline,
+        ...     StableDiffusionInpaintPipeline,
+        ... )
+
+        >>> text2img = StableDiffusionPipeline.from_pretrained("stable-diffusion-v1-5/stable-diffusion-v1-5")
+        >>> img2img = StableDiffusionImg2ImgPipeline(**text2img.components, **text2img.parameters)
+        >>> inpaint = StableDiffusionInpaintPipeline(**text2img.components, **text2img.parameters)
+        ```
+        """
+        expected_modules, optional_parameters = self._get_signature_keys(self)
+        pipeline_parameters = {
+            k: self.config[k] for k in self.config.keys() if not k.startswith("_") and k in optional_parameters
+        }
+
+        return pipeline_parameters
+
+    @property
     def components(self) -> Dict[str, Any]:
         r"""
         The `self.components` property can be useful to run different pipelines with the same weights and
@@ -1261,12 +1273,8 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
         option is enabled, you should observe lower GPU memory usage and a potential speed up during inference. Speed
         up during training is not guaranteed.
 
-        <Tip warning={true}>
-
-        ⚠️ When memory efficient attention and sliced attention are both enabled, memory efficient attention takes
-        precedent.
-
-        </Tip>
+        > [!WARNING] > ⚠️ When memory efficient attention and sliced attention are both enabled, memory efficient
+        attention takes > precedent.
 
         Parameters:
             attention_op (`Callable`, *optional*):
@@ -1309,6 +1317,59 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
 
         for module in modules:
             fn_recursive_set_mem_eff(module)
+
+    def enable_attention_slicing(self, slice_size: Optional[Union[str, int]] = "auto"):
+        r"""
+        Enable sliced attention computation. When this option is enabled, the attention module splits the input tensor
+        in slices to compute attention in several steps. For more than one attention head, the computation is performed
+        sequentially over each head. This is useful to save some memory in exchange for a small speed decrease.
+
+        > [!WARNING] > ⚠️ Don't enable attention slicing if you're already using `scaled_dot_product_attention` (SDPA)
+        from PyTorch > 2.0 or xFormers. These attention computations are already very memory efficient so you won't
+        need to enable > this function. If you enable attention slicing with SDPA or xFormers, it can lead to serious
+        slow downs!
+
+        Args:
+            slice_size (`str` or `int`, *optional*, defaults to `"auto"`):
+                When `"auto"`, halves the input to the attention heads, so attention will be computed in two steps. If
+                `"max"`, maximum amount of memory will be saved by running only one slice at a time. If a number is
+                provided, uses as many slices as `attention_head_dim // slice_size`. In this case, `attention_head_dim`
+                must be a multiple of `slice_size`.
+
+        Examples:
+
+        ```py
+        >>> import mindspore as ms
+        >>> from mindone.diffusers import StableDiffusionPipeline
+
+        >>> pipe = StableDiffusionPipeline.from_pretrained(
+        ...     "stable-diffusion-v1-5/stable-diffusion-v1-5",
+        ...     mindspore_dtype=ms.float16,
+        ...     use_safetensors=True,
+        ... )
+
+        >>> prompt = "a photo of an astronaut riding a horse on mars"
+        >>> pipe.enable_attention_slicing()
+        >>> image = pipe(prompt).images[0]
+        ```
+        """
+        self.set_attention_slice(slice_size)
+
+    def disable_attention_slicing(self):
+        r"""
+        Disable sliced attention computation. If `enable_attention_slicing` was previously called, attention is
+        computed in one step.
+        """
+        # set slice_size = `None` to disable `attention slicing`
+        self.enable_attention_slicing(None)
+
+    def set_attention_slice(self, slice_size: Optional[int]):
+        module_names, _ = self._get_signature_keys(self)
+        modules = [getattr(self, n, None) for n in module_names]
+        modules = [m for m in modules if isinstance(m, ms.nn.Cell) and hasattr(m, "set_attention_slice")]
+
+        for module in modules:
+            module.set_attention_slice(slice_size)
 
     def enable_flash_sdp(self, enabled: bool):
         r"""
@@ -1502,6 +1563,12 @@ class StableDiffusionMixin:
         Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
         compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
         """
+        depr_message = f"Calling `enable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.enable_slicing()`."
+        deprecate(
+            "enable_vae_slicing",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.enable_slicing()
 
     def disable_vae_slicing(self):
@@ -1509,6 +1576,12 @@ class StableDiffusionMixin:
         Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
         computing decoding in one step.
         """
+        depr_message = f"Calling `disable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.disable_slicing()`."
+        deprecate(
+            "disable_vae_slicing",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.disable_slicing()
 
     def enable_vae_tiling(self):
@@ -1517,6 +1590,12 @@ class StableDiffusionMixin:
         compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
         processing larger images.
         """
+        depr_message = f"Calling `enable_vae_tiling()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.enable_tiling()`."
+        deprecate(
+            "enable_vae_tiling",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.enable_tiling()
 
     def disable_vae_tiling(self):
@@ -1524,6 +1603,12 @@ class StableDiffusionMixin:
         Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
         computing decoding in one step.
         """
+        depr_message = f"Calling `disable_vae_tiling()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.disable_tiling()`."
+        deprecate(
+            "disable_vae_tiling",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.disable_tiling()
 
     def enable_freeu(self, s1: float, s2: float, b1: float, b2: float):
@@ -1559,11 +1644,7 @@ class StableDiffusionMixin:
         Enables fused QKV projections. For self-attention modules, all projection matrices (i.e., query, key, value)
         are fused. For cross-attention modules, key and value projection matrices are fused.
 
-        <Tip warning={true}>
-
-        This API is 🧪 experimental.
-
-        </Tip>
+        > [!WARNING] > This API is 🧪 experimental.
 
         Args:
             unet (`bool`, defaults to `True`): To apply fusion on the UNet.
@@ -1576,11 +1657,7 @@ class StableDiffusionMixin:
     def unfuse_qkv_projections(self, unet: bool = True, vae: bool = True):
         """Disable QKV projection fusion if enabled.
 
-        <Tip warning={true}>
-
-        This API is 🧪 experimental.
-
-        </Tip>
+        > [!WARNING] > This API is 🧪 experimental.
 
         Args:
             unet (`bool`, defaults to `True`): To apply fusion on the UNet.

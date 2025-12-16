@@ -25,12 +25,14 @@ from ...loaders import PeftAdapterMixin, UNet2DConditionLoadersMixin
 from ...loaders.single_file_model import FromOriginalModelMixin
 from ...utils import BaseOutput, logging
 from ..activations import get_activation
+from ..attention import AttentionMixin
 from ..attention_processor import (
     ADDED_KV_ATTENTION_PROCESSORS,
     CROSS_ATTENTION_PROCESSORS,
-    AttentionProcessor,
+    Attention,
     AttnAddedKVProcessor,
     AttnProcessor,
+    FusedAttnProcessor2_0,
 )
 from ..embeddings import (
     GaussianFourierProjection,
@@ -64,7 +66,7 @@ class UNet2DConditionOutput(BaseOutput):
 
 
 class UNet2DConditionModel(
-    ModelMixin, ConfigMixin, FromOriginalModelMixin, UNet2DConditionLoadersMixin, PeftAdapterMixin
+    ModelMixin, AttentionMixin, ConfigMixin, FromOriginalModelMixin, UNet2DConditionLoadersMixin, PeftAdapterMixin
 ):
     r"""
     A conditional 2D UNet model that takes a noisy sample, conditional state, and a timestep and returns a sample
@@ -173,16 +175,21 @@ class UNet2DConditionModel(
         center_input_sample: bool = False,
         flip_sin_to_cos: bool = True,
         freq_shift: int = 0,
-        down_block_types: Tuple[str] = (
+        down_block_types: Tuple[str, ...] = (
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
             "DownBlock2D",
         ),
         mid_block_type: Optional[str] = "UNetMidBlock2DCrossAttn",
-        up_block_types: Tuple[str] = ("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"),
+        up_block_types: Tuple[str, ...] = (
+            "UpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+        ),
         only_cross_attention: Union[bool, Tuple[bool]] = False,
-        block_out_channels: Tuple[int] = (320, 640, 1280, 1280),
+        block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280),
         layers_per_block: Union[int, Tuple[int]] = 2,
         downsample_padding: int = 1,
         mid_block_scale_factor: float = 1,
@@ -713,64 +720,6 @@ class UNet2DConditionModel(
                 positive_len=positive_len, out_dim=cross_attention_dim, feature_type=feature_type
             )
 
-    @property
-    def attn_processors(self) -> Dict[str, AttentionProcessor]:
-        r"""
-        Returns:
-            `dict` of attention processors: A dictionary containing all attention processors used in the model with
-            indexed by its weight name.
-        """
-        # set recursively
-        processors = {}
-
-        def fn_recursive_add_processors(name: str, module: nn.Cell, processors: Dict[str, AttentionProcessor]):
-            if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor()
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
-
-            return processors
-
-        for name, module in self.name_cells().items():
-            fn_recursive_add_processors(name, module, processors)
-
-        return processors
-
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
-        r"""
-        Sets the attention processor to use to compute attention.
-
-        Parameters:
-            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
-                The instantiated processor class or a dictionary of processor classes that will be set as the processor
-                for **all** `Attention` layers.
-
-                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
-                processor. This is strongly recommended when setting trainable attention processors.
-
-        """
-        count = len(self.attn_processors.keys())
-
-        if isinstance(processor, dict) and len(processor) != count:
-            raise ValueError(
-                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
-                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
-            )
-
-        def fn_recursive_attn_processor(name: str, module: nn.Cell, processor):
-            if hasattr(module, "set_processor"):
-                if not isinstance(processor, dict):
-                    module.set_processor(processor)
-                else:
-                    module.set_processor(processor.pop(f"{name}.processor"))
-
-            for sub_name, child in module.name_cells().items():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
-
-        for name, module in self.name_cells().items():
-            fn_recursive_attn_processor(name, module, processor)
-
     def set_default_attn_processor(self):
         """
         Disables custom attention processors and sets the default attention implementation.
@@ -786,7 +735,136 @@ class UNet2DConditionModel(
 
         self.set_attn_processor(processor)
 
-    def get_time_embed(self, sample: ms.Tensor, timestep: Union[ms.Tensor, float, int]) -> Optional[ms.Tensor]:
+    def set_attention_slice(self, slice_size: Union[str, int, List[int]] = "auto"):
+        r"""
+        Enable sliced attention computation.
+
+        When this option is enabled, the attention module splits the input tensor in slices to compute attention in
+        several steps. This is useful for saving some memory in exchange for a small decrease in speed.
+
+        Args:
+            slice_size (`str` or `int` or `list(int)`, *optional*, defaults to `"auto"`):
+                When `"auto"`, input to the attention heads is halved, so attention is computed in two steps. If
+                `"max"`, maximum amount of memory is saved by running only one slice at a time. If a number is
+                provided, uses as many slices as `attention_head_dim // slice_size`. In this case, `attention_head_dim`
+                must be a multiple of `slice_size`.
+        """
+        sliceable_head_dims = []
+
+        def fn_recursive_retrieve_sliceable_dims(module: ms.nn.Cell):
+            if hasattr(module, "set_attention_slice"):
+                sliceable_head_dims.append(module.sliceable_head_dim)
+
+            for child in module.name_cells().values():
+                fn_recursive_retrieve_sliceable_dims(child)
+
+        # retrieve number of attention layers
+        for module in self.name_cells().values():
+            fn_recursive_retrieve_sliceable_dims(module)
+
+        num_sliceable_layers = len(sliceable_head_dims)
+
+        if slice_size == "auto":
+            # half the attention head size is usually a good trade-off between
+            # speed and memory
+            slice_size = [dim // 2 for dim in sliceable_head_dims]
+        elif slice_size == "max":
+            # make smallest slice possible
+            slice_size = num_sliceable_layers * [1]
+
+        slice_size = num_sliceable_layers * [slice_size] if not isinstance(slice_size, list) else slice_size
+
+        if len(slice_size) != len(sliceable_head_dims):
+            raise ValueError(
+                f"You have provided {len(slice_size)}, but {self.config} has {len(sliceable_head_dims)} different"
+                f" attention layers. Make sure to match `len(slice_size)` to be {len(sliceable_head_dims)}."
+            )
+
+        for i in range(len(slice_size)):
+            size = slice_size[i]
+            dim = sliceable_head_dims[i]
+            if size is not None and size > dim:
+                raise ValueError(f"size {size} has to be smaller or equal to {dim}.")
+
+        # Recursively walk through all the children.
+        # Any children which exposes the set_attention_slice method
+        # gets the message
+        def fn_recursive_set_attention_slice(module: ms.nn.Cell, slice_size: List[int]):
+            if hasattr(module, "set_attention_slice"):
+                module.set_attention_slice(slice_size.pop())
+
+            for child in module.name_cells().values():
+                fn_recursive_set_attention_slice(child, slice_size)
+
+        reversed_slice_size = list(reversed(slice_size))
+        for module in self.name_cells().values():
+            fn_recursive_set_attention_slice(module, reversed_slice_size)
+
+    def enable_freeu(self, s1: float, s2: float, b1: float, b2: float):
+        r"""Enables the FreeU mechanism from https://huggingface.co/papers/2309.11497.
+
+        The suffixes after the scaling factors represent the stage blocks where they are being applied.
+
+        Please refer to the [official repository](https://github.com/ChenyangSi/FreeU) for combinations of values that
+        are known to work well for different pipelines such as Stable Diffusion v1, v2, and Stable Diffusion XL.
+
+        Args:
+            s1 (`float`):
+                Scaling factor for stage 1 to attenuate the contributions of the skip features. This is done to
+                mitigate the "oversmoothing effect" in the enhanced denoising process.
+            s2 (`float`):
+                Scaling factor for stage 2 to attenuate the contributions of the skip features. This is done to
+                mitigate the "oversmoothing effect" in the enhanced denoising process.
+            b1 (`float`): Scaling factor for stage 1 to amplify the contributions of backbone features.
+            b2 (`float`): Scaling factor for stage 2 to amplify the contributions of backbone features.
+        """
+        for i, upsample_block in enumerate(self.up_blocks):
+            setattr(upsample_block, "s1", s1)
+            setattr(upsample_block, "s2", s2)
+            setattr(upsample_block, "b1", b1)
+            setattr(upsample_block, "b2", b2)
+
+    def disable_freeu(self):
+        """Disables the FreeU mechanism."""
+        freeu_keys = {"s1", "s2", "b1", "b2"}
+        for i, upsample_block in enumerate(self.up_blocks):
+            for k in freeu_keys:
+                if hasattr(upsample_block, k) or getattr(upsample_block, k, None) is not None:
+                    setattr(upsample_block, k, None)
+
+    def fuse_qkv_projections(self):
+        """
+        Enables fused QKV projections. For self-attention modules, all projection matrices (i.e., query, key, value)
+        are fused. For cross-attention modules, key and value projection matrices are fused.
+
+        > [!WARNING] > This API is 🧪 experimental.
+        """
+        self.original_attn_processors = None
+
+        for _, attn_processor in self.attn_processors.items():
+            if "Added" in str(attn_processor.__class__.__name__):
+                raise ValueError("`fuse_qkv_projections()` is not supported for models having added KV projections.")
+
+        self.original_attn_processors = self.attn_processors
+
+        for _, module in self.cells_and_names():
+            if isinstance(module, Attention):
+                module.fuse_projections(fuse=True)
+
+        self.set_attn_processor(FusedAttnProcessor2_0())
+
+    def unfuse_qkv_projections(self):
+        """Disables the fused QKV projection if enabled.
+
+        > [!WARNING] > This API is 🧪 experimental.
+
+        """
+        if self.original_attn_processors is not None:
+            self.set_attn_processor(self.original_attn_processors)
+
+    def get_time_embed(
+        self, sample: torch.Tensor, timestep: Union[torch.Tensor, float, int]
+    ) -> Optional[torch.Tensor]:
         timesteps = timestep
         # todo: unavailable mint interface
         if not ops.is_tensor(timesteps):
@@ -804,7 +882,6 @@ class UNet2DConditionModel(
             timesteps = timesteps.tile((sample.shape[0],))
 
         t_emb = self.time_proj(timesteps)
-
         # `Timesteps` does not contain any weights and will always return f32 tensors
         # but time_embedding might actually be running in fp16. so we need to cast here.
         # there might be better ways to encapsulate this.

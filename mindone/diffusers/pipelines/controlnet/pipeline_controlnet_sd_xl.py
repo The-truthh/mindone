@@ -875,7 +875,13 @@ class StableDiffusionXLControlNetPipeline(
         add_time_ids = ms.tensor([add_time_ids], dtype=dtype)
         return add_time_ids
 
+    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_upscale.StableDiffusionUpscalePipeline.upcast_vae
     def upcast_vae(self):
+        deprecate(
+            "upcast_vae",
+            "1.0.0",
+            "`upcast_vae` is deprecated. Please use `pipe.vae.to(ms.float32)`.",
+        )
         self.vae.to(dtype=ms.float32)
 
     # Copied from diffusers.pipelines.latent_consistency_models.pipeline_latent_consistency_text2img.LatentConsistencyModelPipeline.get_guidance_scale_embedding

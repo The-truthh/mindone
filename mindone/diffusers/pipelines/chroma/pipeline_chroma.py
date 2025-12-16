@@ -30,7 +30,7 @@ from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import FluxIPAdapterMixin, FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin
 from ...models import AutoencoderKL, ChromaTransformer2DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
-from ...utils import logging, scale_lora_layers, unscale_lora_layers
+from ...utils import deprecate, logging, scale_lora_layers, unscale_lora_layers
 from ...utils.mindspore_utils import pynative_context, randn_tensor
 from ..pipeline_utils import DiffusionPipeline
 from .pipeline_output import ChromaPipelineOutput
@@ -46,8 +46,8 @@ EXAMPLE_DOC_STRING = """
         >>> import mindspore as ms
         >>> from mindone.diffusers import ChromaPipeline
 
-        >>> model_id = "lodestones/Chroma"
-        >>> ckpt_path = "https://huggingface.co/lodestones/Chroma/blob/main/chroma-unlocked-v37.safetensors"
+        >>> model_id = "lodestones/Chroma1-HD"
+        >>> ckpt_path = "https://huggingface.co/lodestones/Chroma1-HD/blob/main/Chroma1-HD.safetensors"
         >>> transformer = ChromaTransformer2DModel.from_single_file(ckpt_path, mindspore_dtype=ms.bfloat16)
         >>> pipe = ChromaPipeline.from_pretrained(
         ...     model_id,
@@ -150,7 +150,7 @@ class ChromaPipeline(
     r"""
     The Chroma pipeline for text-to-image generation.
 
-    Reference: https://huggingface.co/lodestones/Chroma/
+    Reference: https://huggingface.co/lodestones/Chroma1-HD/
 
     Args:
         transformer ([`ChromaTransformer2DModel`]):
@@ -223,21 +223,21 @@ class ChromaPipeline(
             return_tensors="np",
         )
         text_input_ids = ms.tensor(text_inputs.input_ids)
-        attention_mask = ms.tensor(text_inputs.attention_mask).clone()
+        tokenizer_mask = ms.tensor(text_inputs.attention_mask)
 
-        # Chroma requires the attention mask to include one padding token
-        seq_lengths = attention_mask.sum(dim=1)
-        mask_indices = mint.arange(attention_mask.shape[1]).unsqueeze(0).broadcast_to((batch_size, -1))
-        attention_mask = (mask_indices <= seq_lengths.unsqueeze(1)).long()
+        # unlike FLUX, Chroma uses the attention mask when generating the T5 embedding
+        prompt_embeds = self.text_encoder(
+            text_input_ids,
+            output_hidden_states=False,
+            attention_mask=tokenizer_mask,
+        )[0]
 
-        with pynative_context():
-            prompt_embeds = self.text_encoder(
-                text_input_ids, output_hidden_states=False, attention_mask=attention_mask
-            )[0]
-
-        dtype = self.text_encoder.dtype
         prompt_embeds = prompt_embeds.to(dtype=dtype)
-        attention_mask = attention_mask.to(dtype=dtype)
+
+        # for the text tokens, chroma requires that all except the first padding token are masked out during the forward pass through the transformer
+        seq_lengths = tokenizer_mask.sum(dim=1)
+        mask_indices = mint.arange(tokenizer_mask.shape[1]).unsqueeze(0).expand((batch_size, -1))
+        attention_mask = (mask_indices <= seq_lengths.unsqueeze(1)).to(dtype=dtype)
 
         _, seq_len, _ = prompt_embeds.shape
 
@@ -490,6 +490,12 @@ class ChromaPipeline(
         Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
         compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
         """
+        depr_message = f"Calling `enable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.enable_slicing()`."
+        deprecate(
+            "enable_vae_slicing",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.enable_slicing()
 
     def disable_vae_slicing(self):
@@ -497,6 +503,12 @@ class ChromaPipeline(
         Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
         computing decoding in one step.
         """
+        depr_message = f"Calling `disable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.disable_slicing()`."
+        deprecate(
+            "disable_vae_slicing",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.disable_slicing()
 
     def enable_vae_tiling(self):
@@ -505,6 +517,12 @@ class ChromaPipeline(
         compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
         processing larger images.
         """
+        depr_message = f"Calling `enable_vae_tiling()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.enable_tiling()`."
+        deprecate(
+            "enable_vae_tiling",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.enable_tiling()
 
     def disable_vae_tiling(self):
@@ -512,6 +530,12 @@ class ChromaPipeline(
         Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
         computing decoding in one step.
         """
+        depr_message = f"Calling `disable_vae_tiling()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.disable_tiling()`."
+        deprecate(
+            "disable_vae_tiling",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.disable_tiling()
 
     # Copied from mindone.diffusers.pipelines.flux.pipeline_flux.FluxPipeline.prepare_latents
@@ -561,7 +585,7 @@ class ChromaPipeline(
 
         # Extend the prompt attention mask to account for image tokens in the final sequence
         attention_mask = mint.cat(
-            [attention_mask, mint.ones((batch_size, sequence_length), dtype=attention_mask.dtype)],
+            [attention_mask, mint.ones((batchwill be generated_length), dtype=ms.bool_)],
             dim=1,
         )
         attention_mask = attention_mask.to(dtype)
@@ -642,11 +666,11 @@ class ChromaPipeline(
                 their `set_timesteps` method. If not defined, the default behavior when `num_inference_steps` is passed
                 will be used.
             guidance_scale (`float`, *optional*, defaults to 3.5):
-                Embedded guiddance scale is enabled by setting `guidance_scale` > 1. Higher `guidance_scale` encourages
-                a model to generate images more aligned with `prompt` at the expense of lower image quality.
-
-                Guidance-distilled models approximates true classifer-free guidance for `guidance_scale` > 1. Refer to
-                the [paper](https://huggingface.co/papers/2210.03142) to learn more.
+                Guidance scale as defined in [Classifier-Free Diffusion
+                Guidance](https://huggingface.co/papers/2207.12598). `guidance_scale` is defined as `w` of equation 2.
+                of [Imagen Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting
+                `guidance_scale > 1`. Higher guidance scale encourages to generate images that are closely linked to
+                the text `prompt`, usually at the expense of lower image quality.
             num_images_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
@@ -655,7 +679,7 @@ class ChromaPipeline(
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
-                tensor will ge generated by sampling using the supplied random `generator`.
+                tensor will be generated by sampling using the supplied random `generator`.
             prompt_embeds (`ms.Tensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.

@@ -27,7 +27,10 @@ from .before_denoise import (
     StableDiffusionXLPrepareLatentsStep,
     StableDiffusionXLSetTimestepsStep,
 )
-from .decoders import StableDiffusionXLDecodeStep, StableDiffusionXLInpaintOverlayMaskStep
+from .decoders import (
+    StableDiffusionXLDecodeStep,
+    StableDiffusionXLInpaintOverlayMaskStep,
+)
 from .denoise import (
     StableDiffusionXLControlNetDenoiseStep,
     StableDiffusionXLDenoiseStep,

@@ -62,7 +62,7 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         prediction_type (`str`, defaults to `epsilon`, *optional*):
             Prediction type of the scheduler function; can be `epsilon` (predicts the noise of the diffusion process),
             `sample` (directly predicts the noisy sample`) or `v_prediction` (see section 2.4 of [Imagen
-            Video](https://imagen.research.google/video/paper.pdf) paper).
+            Video](https://huggingface.co/papers/2210.02303) paper).
         thresholding (`bool`, defaults to `False`):
             Whether to use the "dynamic thresholding" method. This is unsuitable for latent-space diffusion models such
             as Stable Diffusion.
@@ -174,7 +174,7 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
 
         Args:
-            begin_index (`int`):
+            begin_index (`int`, defaults to `0`):
                 The begin index for the scheduler.
         """
         self._begin_index = begin_index
@@ -278,7 +278,6 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
     # Copied from diffusers.schedulers.scheduling_edm_euler.EDMEulerScheduler._compute_karras_sigmas
     def _compute_karras_sigmas(self, ramp, sigma_min=None, sigma_max=None) -> ms.Tensor:
         """Constructs the noise schedule of Karras et al. (2022)."""
-
         sigma_min = sigma_min or self.config.sigma_min
         sigma_max = sigma_max or self.config.sigma_max
 
@@ -302,6 +301,8 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
     # Copied from diffusers.schedulers.scheduling_ddpm.DDPMScheduler._threshold_sample
     def _threshold_sample(self, sample: ms.Tensor) -> ms.Tensor:
         """
+        Apply dynamic thresholding to the predicted sample.
+
         "Dynamic thresholding: At each sampling step we set s to a certain percentile absolute pixel value in xt0 (the
         prediction of x_0 at timestep t), and if s > 1, then we threshold xt0 to the range [-s, s] and then divide by
         s. Dynamic thresholding pushes saturated pixels (those near -1 and 1) inwards, thereby actively preventing
@@ -309,6 +310,14 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         photorealism as well as better image-text alignment, especially when using very large guidance weights."
 
         https://huggingface.co/papers/2205.11487
+
+        Args:
+            sample (`ms.Tensor`):
+                The predicted sample to be thresholded.
+
+        Returns:
+            `ms.Tensor`:
+                The thresholded sample.
         """
         dtype = sample.dtype
         batch_size, channels, *remaining_dims = sample.shape
@@ -335,6 +344,19 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._sigma_to_t
     def _sigma_to_t(self, sigma, log_sigmas):
+        """
+        Convert sigma values to corresponding timestep values through interpolation.
+
+        Args:
+            sigma (`np.ndarray`):
+                The sigma value(s) to convert to timestep(s).
+            log_sigmas (`np.ndarray`):
+                The logarithm of the sigma schedule used for interpolation.
+
+        Returns:
+            `np.ndarray`:
+                The interpolated timestep value(s) corresponding to the input sigma(s).
+        """
         # get log sigma
         log_sigma = np.log(np.maximum(sigma, 1e-10))
 
@@ -373,12 +395,8 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         designed to discretize an integral of the noise prediction model, and DPM-Solver++ is designed to discretize an
         integral of the data prediction model.
 
-        <Tip>
-
-        The algorithm and model type are decoupled. You can use either DPMSolver or DPMSolver++ for both noise
-        prediction and data prediction models.
-
-        </Tip>
+        > [!TIP] > The algorithm and model type are decoupled. You can use either DPMSolver or DPMSolver++ for both
+        noise > prediction and data prediction models.
 
         Args:
             model_output (`ms.Tensor`):
@@ -565,7 +583,22 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         return x_t
 
     # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.index_for_timestep
-    def index_for_timestep(self, timestep, schedule_timesteps=None):
+    def index_for_timestep(
+        self, timestep: Union[int, ms.Tensor], schedule_timesteps: Optional[ms.Tensor] = None
+    ) -> int:
+        """
+        Find the index for a given timestep in the schedule.
+
+        Args:
+            timestep (`int` or `ms.Tensor`):
+                The timestep for which to find the index.
+            schedule_timesteps (`ms.Tensor`, *optional*):
+                The timestep schedule to search in. If `None`, uses `self.timesteps`.
+
+        Returns:
+            `int`:
+                The index of the timestep in the schedule.
+        """
         if schedule_timesteps is None:
             schedule_timesteps = self.timesteps
 
@@ -590,6 +623,10 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
     def _init_step_index(self, timestep):
         """
         Initialize the step_index counter for the scheduler.
+
+        Args:
+            timestep (`int` or `ms.Tensor`):
+                The current timestep for which to initialize the step index.
         """
 
         if self.begin_index is None:
@@ -600,7 +637,7 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
     def step(
         self,
         model_output: ms.Tensor,
-        timestep: int,
+        timestep: Union[int, ms.Tensor],
         sample: ms.Tensor,
         generator=None,
         return_dict: bool = False,
@@ -680,6 +717,21 @@ class EDMDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         noise: ms.Tensor,
         timesteps: ms.Tensor,
     ) -> ms.Tensor:
+        """
+        Add noise to the original samples according to the noise schedule at the specified timesteps.
+
+        Args:
+            original_samples (`ms.Tensor`):
+                The original samples to which noise will be added.
+            noise (`ms.Tensor`):
+                The noise tensor to add to the original samples.
+            timesteps (`ms.Tensor`):
+                The timesteps at which to add noise, determining the noise level from the schedule.
+
+        Returns:
+            `ms.Tensor`:
+                The noisy samples with added noise scaled according to the timestep schedule.
+        """
         broadcast_shape = original_samples.shape
         # Make sure sigmas and timesteps have the same device and dtype as original_samples
         sigmas = self.sigmas.to(dtype=original_samples.dtype)

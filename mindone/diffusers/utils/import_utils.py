@@ -24,6 +24,7 @@ import operator as op
 import os
 import sys
 from collections import OrderedDict, defaultdict
+from functools import lru_cache as cache
 from itertools import chain
 from types import ModuleType
 from typing import Any, Tuple, Union
@@ -70,10 +71,11 @@ def _is_package_available(pkg_name: str, get_dist_name: bool = False) -> Tuple[b
                 # Fallback for Python < 3.10
                 for dist in importlib_metadata.distributions():
                     _top_level_declared = (dist.read_text("top_level.txt") or "").split()
-                    _infered_opt_names = {
+                    # Infer top-level package names from file structure
+                    _inferred_opt_names = {
                         f.parts[0] if len(f.parts) > 1 else inspect.getmodulename(f) for f in (dist.files or [])
                     } - {None}
-                    _top_level_inferred = filter(lambda name: "." not in name, _infered_opt_names)
+                    _top_level_inferred = filter(lambda name: "." not in name, _inferred_opt_names)
                     for pkg in _top_level_declared or _top_level_inferred:
                         _package_map[pkg].append(dist.metadata["Name"])
             except Exception as _:  # noqa
@@ -161,6 +163,7 @@ _scipy_available, _scipy_version = _is_package_available("scipy")
 _librosa_available, _librosa_version = _is_package_available("librosa")
 _better_profanity_available, _better_profanity_version = _is_package_available("better_profanity")
 _nltk_available, _nltk_version = _is_package_available("nltk")
+_aiter_available, _aiter_version = _is_package_available("aiter")
 
 
 def is_mindspore_available():
@@ -246,6 +249,9 @@ def is_better_profanity_available():
 def is_nltk_available():
     return _nltk_available
 
+
+def is_aiter_available():
+    return _aiter_available
 
 # docstyle-ignore
 INFLECT_IMPORT_ERROR = """
@@ -395,6 +401,7 @@ def compare_versions(library_or_version: Union[str, Version], operation: str, re
     return operation(library_or_version, parse(requirement_version))
 
 
+@cache
 def is_mindspore_version(operation: str, version: str):
     """
     Compares the current MindSpore version to a given reference with an operation.
@@ -408,6 +415,7 @@ def is_mindspore_version(operation: str, version: str):
     return compare_versions(parse(_mindspore_version), operation, version)
 
 
+@cache
 def is_hf_hub_version(operation: str, version: str):
     """
     Compares the current Hugging Face Hub version to a given reference with an operation.
@@ -423,6 +431,7 @@ def is_hf_hub_version(operation: str, version: str):
     return compare_versions(parse(_hf_hub_version), operation, version)
 
 
+@cache
 def is_peft_version(operation: str, version: str):
     """
     Compares the current PEFT version to a given reference with an operation.
@@ -438,6 +447,22 @@ def is_peft_version(operation: str, version: str):
     if not _peft_version:
         return False
     return compare_versions(parse(_peft_version), operation, version)
+
+
+@cache
+def is_aiter_version(operation: str, version: str):
+    """
+    Compares the current aiter version to a given reference with an operation.
+
+    Args:
+        operation (`str`):
+            A string representation of an operator, such as `">"` or `"<="`
+        version (`str`):
+            A version string
+    """
+    if not _aiter_available:
+        return False
+    return compare_versions(parse(_aiter_version), operation, version)
 
 
 def maybe_import_module_in_mindone(module_name: str, force_original: bool = False):

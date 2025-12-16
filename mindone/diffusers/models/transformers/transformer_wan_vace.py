@@ -24,7 +24,7 @@ from mindspore import mint, nn
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import FromOriginalModelMixin, PeftAdapterMixin
 from ...utils import logging
-from ..attention import FeedForward
+from ..attention import AttentionMixin, FeedForward
 from ..cache_utils import CacheMixin
 from ..layers_compat import unflatten
 from ..modeling_outputs import Transformer2DModelOutput
@@ -137,7 +137,9 @@ class WanVACETransformerBlock(nn.Cell):
         return conditioning_states, control_hidden_states
 
 
-class WanVACETransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin):
+class WanVACETransformer3DModel(
+    ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin, AttentionMixin
+):
     r"""
     A Transformer model for video-like data used in the Wan model.
 
@@ -183,7 +185,7 @@ class WanVACETransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromO
     @register_to_config
     def __init__(
         self,
-        patch_size: Tuple[int] = (1, 2, 2),
+        patch_size: Tuple[int, ...] = (1, 2, 2),
         num_attention_heads: int = 40,
         attention_head_dim: int = 128,
         in_channels: int = 16,

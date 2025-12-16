@@ -60,6 +60,7 @@ class StableDiffusionXLLoopBeforeDenoiser(ModularPipelineBlocks):
             ),
         ]
 
+    @ms._no_grad()
     def __call__(self, components: StableDiffusionXLModularPipeline, block_state: BlockState, i: int, t: int):
         block_state.scaled_latents = components.scheduler.scale_model_input(block_state.latents, t)
 
@@ -109,7 +110,7 @@ class StableDiffusionXLInpaintLoopBeforeDenoiser(ModularPipelineBlocks):
     def check_inputs(components, block_state):
         num_channels_unet = components.num_channels_unet
         if num_channels_unet == 9:
-            # default case for runwayml/stable-diffusion-inpainting
+            # default case for stable-diffusion-v1-5/stable-diffusion-inpainting
             if block_state.mask is None or block_state.masked_image_latents is None:
                 raise ValueError("mask and masked_image_latents must be provided for inpainting-specific Unet")
             num_channels_latents = block_state.latents.shape[1]
@@ -124,6 +125,7 @@ class StableDiffusionXLInpaintLoopBeforeDenoiser(ModularPipelineBlocks):
                     " `components.unet` or your `mask_image` or `image` input."
                 )
 
+    @ms._no_grad()
     def __call__(self, components: StableDiffusionXLModularPipeline, block_state: BlockState, i: int, t: int):
         self.check_inputs(components, block_state)
 
@@ -188,6 +190,7 @@ class StableDiffusionXLLoopDenoiser(ModularPipelineBlocks):
             ),
         ]
 
+    @ms._no_grad()
     def __call__(
         self, components: StableDiffusionXLModularPipeline, block_state: BlockState, i: int, t: int
     ) -> PipelineState:
@@ -342,6 +345,7 @@ class StableDiffusionXLControlNetLoopDenoiser(ModularPipelineBlocks):
 
         return extra_kwargs
 
+    @ms._no_grad()
     def __call__(self, components: StableDiffusionXLModularPipeline, block_state: BlockState, i: int, t: int):
         extra_controlnet_kwargs = self.prepare_extra_kwargs(
             components.controlnet.construct, **block_state.controlnet_kwargs
@@ -498,6 +502,7 @@ class StableDiffusionXLLoopAfterDenoiser(ModularPipelineBlocks):
 
         return extra_kwargs
 
+    @ms._no_grad()
     def __call__(self, components: StableDiffusionXLModularPipeline, block_state: BlockState, i: int, t: int):
         # Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         block_state.extra_step_kwargs = self.prepare_extra_kwargs(
@@ -587,6 +592,7 @@ class StableDiffusionXLInpaintLoopAfterDenoiser(ModularPipelineBlocks):
             if block_state.noise is None:
                 raise ValueError(f"noise is required for this step {self.__class__.__name__}")
 
+    @ms._no_grad()
     def __call__(self, components: StableDiffusionXLModularPipeline, block_state: BlockState, i: int, t: int):
         self.check_inputs(components, block_state)
 
@@ -662,6 +668,7 @@ class StableDiffusionXLDenoiseLoopWrapper(LoopSequentialPipelineBlocks):
             ),
         ]
 
+    @ms._no_grad()
     def __call__(self, components: StableDiffusionXLModularPipeline, state: PipelineState) -> PipelineState:
         block_state = self.get_block_state(state)
 

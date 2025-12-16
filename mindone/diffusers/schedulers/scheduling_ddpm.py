@@ -18,7 +18,7 @@
 # DISCLAIMER: This file is strongly influenced by https://github.com/ermongroup/ddim
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -50,10 +50,10 @@ class DDPMSchedulerOutput(BaseOutput):
 
 
 def betas_for_alpha_bar(
-    num_diffusion_timesteps,
-    max_beta=0.999,
-    alpha_transform_type="cosine",
-):
+    num_diffusion_timesteps: int,
+    max_beta: float = 0.999,
+    alpha_transform_type: Literal["cosine", "exp"] = "cosine",
+) -> ms.Tensor:
     """
     Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of
     (1-beta) over time from t = [0,1].
@@ -61,16 +61,17 @@ def betas_for_alpha_bar(
     Contains a function alpha_bar that takes an argument t and transforms it to the cumulative product of (1-beta) up
     to that part of the diffusion process.
 
-
     Args:
-        num_diffusion_timesteps (`int`): the number of betas to produce.
-        max_beta (`float`): the maximum beta to use; use values lower than 1 to
-                     prevent singularities.
-        alpha_transform_type (`str`, *optional*, default to `cosine`): the type of noise schedule for alpha_bar.
-                     Choose from `cosine` or `exp`
+        num_diffusion_timesteps (`int`):
+            The number of betas to produce.
+        max_beta (`float`, defaults to `0.999`):
+            The maximum beta to use; use values lower than 1 to avoid numerical instability.
+        alpha_transform_type (`"cosine"` or `"exp"`, defaults to `"cosine"`):
+            The type of noise schedule for `alpha_bar`. Choose from `cosine` or `exp`.
 
     Returns:
-        betas (`np.ndarray`): the betas used by the scheduler to step the model outputs
+        `ms.Tensor`:
+            The betas used by the scheduler to step the model outputs.
     """
     if alpha_transform_type == "cosine":
 
@@ -94,17 +95,17 @@ def betas_for_alpha_bar(
 
 
 # Copied from diffusers.schedulers.scheduling_ddim.rescale_zero_terminal_snr
-def rescale_zero_terminal_snr(betas):
+def rescale_zero_terminal_snr(betas: ms.Tensor) -> ms.Tensor:
     """
     Rescales betas to have zero terminal SNR Based on https://huggingface.co/papers/2305.08891 (Algorithm 1)
 
-
     Args:
         betas (`ms.Tensor`):
-            the betas that the scheduler is being initialized with.
+            The betas that the scheduler is being initialized with.
 
     Returns:
-        `ms.Tensor`: rescaled betas with zero terminal SNR
+        `ms.Tensor`:
+            Rescaled betas with zero terminal SNR.
     """
     # Convert betas to alphas_bar_sqrt
     alphas = 1.0 - betas
@@ -138,39 +139,37 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
     methods the library implements for all schedulers such as loading and saving.
 
     Args:
-        num_train_timesteps (`int`, defaults to 1000):
+        num_train_timesteps (`int`, defaults to `1000`):
             The number of diffusion steps to train the model.
-        beta_start (`float`, defaults to 0.0001):
+        beta_start (`float`, defaults to `0.0001`):
             The starting `beta` value of inference.
-        beta_end (`float`, defaults to 0.02):
+        beta_end (`float`, defaults to `0.02`):
             The final `beta` value.
-        beta_schedule (`str`, defaults to `"linear"`):
-            The beta schedule, a mapping from a beta range to a sequence of betas for stepping the model. Choose from
-            `linear`, `scaled_linear`, `squaredcos_cap_v2`, or `sigmoid`.
+        beta_schedule (`"linear"`, `"scaled_linear"`, `"squaredcos_cap_v2"`, or `"sigmoid"`, defaults to `"linear"`):
+            The beta schedule, a mapping from a beta range to a sequence of betas for stepping the model.
         trained_betas (`np.ndarray`, *optional*):
             An array of betas to pass directly to the constructor without using `beta_start` and `beta_end`.
-        variance_type (`str`, defaults to `"fixed_small"`):
-            Clip the variance when adding noise to the denoised sample. Choose from `fixed_small`, `fixed_small_log`,
-            `fixed_large`, `fixed_large_log`, `learned` or `learned_range`.
+        variance_type (`"fixed_small"`, `"fixed_small_log"`, `"fixed_large"`, `"fixed_large_log"`, `"learned"`, or `"learned_range"`, defaults to `"fixed_small"`):
+            Clip the variance when adding noise to the denoised sample.
         clip_sample (`bool`, defaults to `True`):
             Clip the predicted sample for numerical stability.
-        clip_sample_range (`float`, defaults to 1.0):
+        clip_sample_range (`float`, defaults to `1.0`):
             The maximum magnitude for sample clipping. Valid only when `clip_sample=True`.
-        prediction_type (`str`, defaults to `epsilon`, *optional*):
+        prediction_type (`"epsilon"`, `"sample"`, or `"v_prediction"`, defaults to `"epsilon"`):
             Prediction type of the scheduler function; can be `epsilon` (predicts the noise of the diffusion process),
             `sample` (directly predicts the noisy sample`) or `v_prediction` (see section 2.4 of [Imagen
-            Video](https://imagen.research.google/video/paper.pdf) paper).
+            Video](https://huggingface.co/papers/2210.02303) paper).
         thresholding (`bool`, defaults to `False`):
             Whether to use the "dynamic thresholding" method. This is unsuitable for latent-space diffusion models such
             as Stable Diffusion.
-        dynamic_thresholding_ratio (`float`, defaults to 0.995):
+        dynamic_thresholding_ratio (`float`, defaults to `0.995`):
             The ratio for the dynamic thresholding method. Valid only when `thresholding=True`.
-        sample_max_value (`float`, defaults to 1.0):
+        sample_max_value (`float`, defaults to `1.0`):
             The threshold value for dynamic thresholding. Valid only when `thresholding=True`.
-        timestep_spacing (`str`, defaults to `"leading"`):
+        timestep_spacing (`"linspace"`, `"leading"`, or `"trailing"`, defaults to `"leading"`):
             The way the timesteps should be scaled. Refer to Table 2 of the [Common Diffusion Noise Schedules and
             Sample Steps are Flawed](https://huggingface.co/papers/2305.08891) for more information.
-        steps_offset (`int`, defaults to 0):
+        steps_offset (`int`, defaults to `0`):
             An offset added to the inference steps, as required by some model families.
         rescale_betas_zero_snr (`bool`, defaults to `False`):
             Whether to rescale the betas to have zero terminal SNR. This enables the model to generate very bright and
@@ -187,16 +186,18 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         num_train_timesteps: int = 1000,
         beta_start: float = 0.0001,
         beta_end: float = 0.02,
-        beta_schedule: str = "linear",
+        beta_schedule: Literal["linear", "scaled_linear", "squaredcos_cap_v2", "sigmoid"] = "linear",
         trained_betas: Optional[Union[np.ndarray, List[float]]] = None,
-        variance_type: str = "fixed_small",
+        variance_type: Literal[
+            "fixed_small", "fixed_small_log", "fixed_large", "fixed_large_log", "learned", "learned_range"
+        ] = "fixed_small",
         clip_sample: bool = True,
-        prediction_type: str = "epsilon",
+        prediction_type: Literal["epsilon", "sample", "v_prediction"] = "epsilon",
         thresholding: bool = False,
         dynamic_thresholding_ratio: float = 0.995,
         clip_sample_range: float = 1.0,
         sample_max_value: float = 1.0,
-        timestep_spacing: str = "leading",
+        timestep_spacing: Literal["linspace", "leading", "trailing"] = "leading",
         steps_offset: int = 0,
         rescale_betas_zero_snr: bool = False,
     ):
@@ -325,7 +326,31 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
 
         self.timesteps = ms.tensor(timesteps)
 
-    def _get_variance(self, t, predicted_variance=None, variance_type=None):
+    def _get_variance(
+        self,
+        t: int,
+        predicted_variance: Optional[ms.Tensor] = None,
+        variance_type: Optional[
+            Literal["fixed_small", "fixed_small_log", "fixed_large", "fixed_large_log", "learned", "learned_range"]
+        ] = None,
+    ) -> ms.Tensor:
+        """
+        Compute the variance for a given timestep according to the specified variance type.
+
+        Args:
+            t (`int`):
+                The current timestep.
+            predicted_variance (`ms.Tensor`, *optional*):
+                The predicted variance from the model. Used only when `variance_type` is `"learned"` or
+                `"learned_range"`.
+            variance_type (`"fixed_small"`, `"fixed_small_log"`, `"fixed_large"`, `"fixed_large_log"`, `"learned"`, or `"learned_range"`, *optional*):
+                The type of variance to compute. If `None`, uses the variance type specified in the scheduler
+                configuration.
+
+        Returns:
+            `ms.Tensor`:
+                The computed variance.
+        """
         prev_t = self.previous_timestep(t)
 
         alpha_prod_t = self.alphas_cumprod[t]
@@ -367,6 +392,8 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
 
     def _threshold_sample(self, sample: ms.Tensor) -> ms.Tensor:
         """
+        Apply dynamic thresholding to the predicted sample.
+
         "Dynamic thresholding: At each sampling step we set s to a certain percentile absolute pixel value in xt0 (the
         prediction of x_0 at timestep t), and if s > 1, then we threshold xt0 to the range [-s, s] and then divide by
         s. Dynamic thresholding pushes saturated pixels (those near -1 and 1) inwards, thereby actively preventing
@@ -374,6 +401,14 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         photorealism as well as better image-text alignment, especially when using very large guidance weights."
 
         https://huggingface.co/papers/2205.11487
+
+        Args:
+            sample (`ms.Tensor`):
+                The predicted sample to be thresholded.
+
+        Returns:
+            `ms.Tensor`:
+                The thresholded sample.
         """
         dtype = sample.dtype
         batch_size, channels, *remaining_dims = sample.shape
@@ -403,7 +438,7 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         model_output: ms.Tensor,
         timestep: int,
         sample: ms.Tensor,
-        generator=None,
+        generator: Optional[np.random.Generator] = None,
         return_dict: bool = False,
     ) -> Union[DDPMSchedulerOutput, Tuple]:
         """
@@ -413,20 +448,19 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         Args:
             model_output (`ms.Tensor`):
                 The direct output from learned diffusion model.
-            timestep (`float`):
+            timestep (`int`):
                 The current discrete timestep in the diffusion chain.
             sample (`ms.Tensor`):
                 A current instance of a sample created by the diffusion process.
             generator (`np.random.Generator`, *optional*):
                 A random number generator.
-            return_dict (`bool`, *optional*, defaults to `False`):
+            return_dict (`bool`, defaults to `False`):
                 Whether or not to return a [`~schedulers.scheduling_ddpm.DDPMSchedulerOutput`] or `tuple`.
 
         Returns:
             [`~schedulers.scheduling_ddpm.DDPMSchedulerOutput`] or `tuple`:
                 If return_dict is `True`, [`~schedulers.scheduling_ddpm.DDPMSchedulerOutput`] is returned, otherwise a
                 tuple is returned where the first element is the sample tensor.
-
         """
         t = timestep
         dtype = sample.dtype
@@ -513,6 +547,22 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         noise: ms.Tensor,
         timesteps: ms.Tensor,  # ms.int32
     ) -> ms.Tensor:
+        """
+        Add noise to the original samples according to the noise magnitude at each timestep (this is the forward
+        diffusion process).
+
+        Args:
+            original_samples (`ms.Tensor`):
+                The original samples to which noise will be added.
+            noise (`ms.Tensor`):
+                The noise to add to the samples.
+            timesteps (`ms.Tensor`):
+                The timesteps indicating the noise level for each sample.
+
+        Returns:
+            `ms.Tensor`:
+                The noisy samples.
+        """
         broadcast_shape = original_samples.shape
         # Make sure alphas_cumprod and timestep have same device and dtype as original_samples
         # Move the self.alphas_cumprod to device to avoid redundant CPU to GPU data movement
@@ -537,6 +587,21 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         return noisy_samples
 
     def get_velocity(self, sample: ms.Tensor, noise: ms.Tensor, timesteps: ms.Tensor) -> ms.Tensor:  # ms.int32
+        """
+        Compute the velocity prediction from the sample and noise according to the velocity formula.
+
+        Args:
+            sample (`ms.Tensor`):
+                The input sample.
+            noise (`ms.Tensor`):
+                The noise tensor.
+            timesteps (`ms.Tensor`):
+                The timesteps for velocity computation.
+
+        Returns:
+            `ms.Tensor`:
+                The computed velocity.
+        """
         broadcast_shape = sample.shape
         # Make sure alphas_cumprod and timestep have same device and dtype as sample
         alphas_cumprod = self.alphas_cumprod.to(dtype=sample.dtype)
@@ -558,10 +623,21 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         velocity = sqrt_alpha_prod * noise - sqrt_one_minus_alpha_prod * sample
         return velocity
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.config.num_train_timesteps
 
-    def previous_timestep(self, timestep):
+    def previous_timestep(self, timestep: int) -> int:
+        """
+        Compute the previous timestep in the diffusion chain.
+
+        Args:
+            timestep (`int`):
+                The current timestep.
+
+        Returns:
+            `int`:
+                The previous timestep.
+        """
         if self.custom_timesteps or self.num_inference_steps:
             index = (self.timesteps == timestep).nonzero(as_tuple=True)[0][0]
             if index == self.timesteps.shape[0] - 1:

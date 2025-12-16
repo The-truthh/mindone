@@ -17,7 +17,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -37,6 +37,7 @@ if is_scipy_available():
 class KDPM2DiscreteSchedulerOutput(BaseOutput):
     """
     Output class for the scheduler's `step` function output.
+
     Args:
         prev_sample (`ms.Tensor` of shape `(batch_size, num_channels, height, width)` for images):
             Computed sample `(x_{t-1})` of previous timestep. `prev_sample` should be used as next model input in the
@@ -52,10 +53,10 @@ class KDPM2DiscreteSchedulerOutput(BaseOutput):
 
 # Copied from diffusers.schedulers.scheduling_ddpm.betas_for_alpha_bar
 def betas_for_alpha_bar(
-    num_diffusion_timesteps,
-    max_beta=0.999,
-    alpha_transform_type="cosine",
-):
+    num_diffusion_timesteps: int,
+    max_beta: float = 0.999,
+    alpha_transform_type: Literal["cosine", "exp"] = "cosine",
+) -> ms.Tensor:
     """
     Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of
     (1-beta) over time from t = [0,1].
@@ -63,16 +64,17 @@ def betas_for_alpha_bar(
     Contains a function alpha_bar that takes an argument t and transforms it to the cumulative product of (1-beta) up
     to that part of the diffusion process.
 
-
     Args:
-        num_diffusion_timesteps (`int`): the number of betas to produce.
-        max_beta (`float`): the maximum beta to use; use values lower than 1 to
-                     prevent singularities.
-        alpha_transform_type (`str`, *optional*, default to `cosine`): the type of noise schedule for alpha_bar.
-                     Choose from `cosine` or `exp`
+        num_diffusion_timesteps (`int`):
+            The number of betas to produce.
+        max_beta (`float`, defaults to `0.999`):
+            The maximum beta to use; use values lower than 1 to avoid numerical instability.
+        alpha_transform_type (`"cosine"` or `"exp"`, defaults to `"cosine"`):
+            The type of noise schedule for `alpha_bar`. Choose from `cosine` or `exp`.
 
     Returns:
-        betas (`np.ndarray`): the betas used by the scheduler to step the model outputs
+        `ms.Tensor`:
+            The betas used by the scheduler to step the model outputs.
     """
     if alpha_transform_type == "cosine":
 
@@ -126,7 +128,7 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
         prediction_type (`str`, defaults to `epsilon`, *optional*):
             Prediction type of the scheduler function; can be `epsilon` (predicts the noise of the diffusion process),
             `sample` (directly predicts the noisy sample`) or `v_prediction` (see section 2.4 of [Imagen
-            Video](https://imagen.research.google/video/paper.pdf) paper).
+            Video](https://huggingface.co/papers/2210.02303) paper).
         timestep_spacing (`str`, defaults to `"linspace"`):
             The way the timesteps should be scaled. Refer to Table 2 of the [Common Diffusion Noise Schedules and
             Sample Steps are Flawed](https://huggingface.co/papers/2305.08891) for more information.
@@ -210,7 +212,7 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
         Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
 
         Args:
-            begin_index (`int`):
+            begin_index (`int`, defaults to `0`):
                 The begin index for the scheduler.
         """
         self._begin_index = begin_index
@@ -329,7 +331,23 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
         return self.sample is None
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler.index_for_timestep
-    def index_for_timestep(self, timestep, schedule_timesteps=None):
+    def index_for_timestep(
+        self, timestep: Union[float, ms.Tensor], schedule_timesteps: Optional[ms.Tensor] = None
+    ) -> int:
+        """
+        Find the index of a given timestep in the timestep schedule.
+
+        Args:
+            timestep (`float` or `ms.Tensor`):
+                The timestep value to find in the schedule.
+            schedule_timesteps (`ms.Tensor`, *optional*):
+                The timestep schedule to search in. If `None`, uses `self.timesteps`.
+
+        Returns:
+            `int`:
+                The index of the timestep in the schedule. For the very first step, returns the second index if
+                multiple matches exist to avoid skipping a sigma when starting mid-schedule (e.g., for image-to-image).
+        """
         if schedule_timesteps is None:
             schedule_timesteps = self.timesteps
 
@@ -347,7 +365,14 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
         return int(indices[pos])
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._init_step_index
-    def _init_step_index(self, timestep):
+    def _init_step_index(self, timestep: Union[float, ms.Tensor]) -> None:
+        """
+        Initialize the step index for the scheduler based on the given timestep.
+
+        Args:
+            timestep (`float` or `ms.Tensor`):
+                The current timestep to initialize the step index from.
+        """
         if self.begin_index is None:
             self._step_index = self.index_for_timestep(timestep)
         else:
@@ -355,6 +380,19 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._sigma_to_t
     def _sigma_to_t(self, sigma, log_sigmas):
+        """
+        Convert sigma values to corresponding timestep values through interpolation.
+
+        Args:
+            sigma (`np.ndarray`):
+                The sigma value(s) to convert to timestep(s).
+            log_sigmas (`np.ndarray`):
+                The logarithm of the sigma schedule used for interpolation.
+
+        Returns:
+            `np.ndarray`:
+                The interpolated timestep value(s) corresponding to the input sigma(s).
+        """
         # get log sigma
         log_sigma = np.log(np.maximum(sigma, 1e-10))
 
@@ -379,7 +417,20 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_karras
     def _convert_to_karras(self, in_sigmas: ms.Tensor, num_inference_steps) -> ms.Tensor:
-        """Constructs the noise schedule of Karras et al. (2022)."""
+        """
+        Construct the noise schedule as proposed in [Elucidating the Design Space of Diffusion-Based Generative
+        Models](https://huggingface.co/papers/2206.00364).
+
+        Args:
+            in_sigmas (`ms.Tensor`):
+                The input sigma values to be converted.
+            num_inference_steps (`int`):
+                The number of inference steps to generate the noise schedule for.
+
+        Returns:
+            `ms.Tensor`:
+                The converted sigma values following the Karras noise schedule.
+        """
 
         # Hack to make sure that other schedulers which copy this function don't break
         # TODO: Add this logic to the other schedulers
@@ -405,7 +456,19 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_exponential
     def _convert_to_exponential(self, in_sigmas: ms.Tensor, num_inference_steps: int) -> ms.Tensor:
-        """Constructs an exponential noise schedule."""
+        """
+        Construct an exponential noise schedule.
+
+        Args:
+            in_sigmas (`ms.Tensor`):
+                The input sigma values to be converted.
+            num_inference_steps (`int`):
+                The number of inference steps to generate the noise schedule for.
+
+        Returns:
+            `ms.Tensor`:
+                The converted sigma values following an exponential schedule.
+        """
 
         # Hack to make sure that other schedulers which copy this function don't break
         # TODO: Add this logic to the other schedulers
@@ -429,7 +492,24 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
     def _convert_to_beta(
         self, in_sigmas: ms.Tensor, num_inference_steps: int, alpha: float = 0.6, beta: float = 0.6
     ) -> ms.Tensor:
-        """From "Beta Sampling is All You Need" [arXiv:2407.12173] (Lee et. al, 2024)"""
+        """
+        Construct a beta noise schedule as proposed in [Beta Sampling is All You
+        Need](https://huggingface.co/papers/2407.12173).
+
+        Args:
+            in_sigmas (`ms.Tensor`):
+                The input sigma values to be converted.
+            num_inference_steps (`int`):
+                The number of inference steps to generate the noise schedule for.
+            alpha (`float`, *optional*, defaults to `0.6`):
+                The alpha parameter for the beta distribution.
+            beta (`float`, *optional*, defaults to `0.6`):
+                The beta parameter for the beta distribution.
+
+        Returns:
+            `ms.Tensor`:
+                The converted sigma values following a beta distribution schedule.
+        """
 
         # Hack to make sure that other schedulers which copy this function don't break
         # TODO: Add this logic to the other schedulers
@@ -558,6 +638,21 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
         noise: ms.Tensor,
         timesteps: ms.Tensor,
     ) -> ms.Tensor:
+        """
+        Add noise to the original samples according to the noise schedule at the specified timesteps.
+
+        Args:
+            original_samples (`ms.Tensor`):
+                The original samples to which noise will be added.
+            noise (`ms.Tensor`):
+                The noise tensor to add to the original samples.
+            timesteps (`ms.Tensor`):
+                The timesteps at which to add noise, determining the noise level from the schedule.
+
+        Returns:
+            `ms.Tensor`:
+                The noisy samples with added noise scaled according to the timestep schedule.
+        """
         broadcast_shape = original_samples.shape
         # Make sure sigmas and timesteps have the same device and dtype as original_samples
         sigmas = self.sigmas.to(dtype=original_samples.dtype)

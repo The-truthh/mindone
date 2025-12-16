@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import inspect
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import PIL
@@ -25,7 +25,7 @@ from ...configuration_utils import FrozenDict
 from ...guiders import ClassifierFreeGuidance
 from ...image_processor import VaeImageProcessor
 from ...models import AutoencoderKL, ControlNetModel, ControlNetUnionModel, UNet2DConditionModel
-from ...pipelines.controlnet.multicontrolnet import MultiControlNetModel
+from ...models.controlnets.multicontrolnet import MultiControlNetModel
 from ...schedulers import EulerDiscreteScheduler
 from ...utils import logging
 from ...utils.mindspore_utils import randn_tensor, unwrap_module
@@ -260,37 +260,37 @@ class StableDiffusionXLInputStep(ModularPipelineBlocks):
             OutputParam(
                 "prompt_embeds",
                 type_hint=ms.Tensor,
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
+                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for denoiser_input_fields
                 description="text embeddings used to guide the image generation",
             ),
             OutputParam(
                 "negative_prompt_embeds",
                 type_hint=ms.Tensor,
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
+                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for denoiser_input_fields
                 description="negative text embeddings used to guide the image generation",
             ),
             OutputParam(
                 "pooled_prompt_embeds",
                 type_hint=ms.Tensor,
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
+                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for denoiser_input_fields
                 description="pooled text embeddings used to guide the image generation",
             ),
             OutputParam(
                 "negative_pooled_prompt_embeds",
                 type_hint=ms.Tensor,
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
+                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for denoiser_input_fields
                 description="negative pooled text embeddings used to guide the image generation",
             ),
             OutputParam(
                 "ip_adapter_embeds",
                 type_hint=List[ms.Tensor],
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
+                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for denoiser_input_fields
                 description="image embeddings for IP-Adapter",
             ),
             OutputParam(
                 "negative_ip_adapter_embeds",
                 type_hint=List[ms.Tensor],
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
+                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for denoiser_input_fields
                 description="negative image embeddings for IP-Adapter",
             ),
         ]

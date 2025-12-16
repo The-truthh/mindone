@@ -425,10 +425,9 @@ def export_to_ply(mesh, output_ply_path: str = None):
                 f.write(format.pack(*vertex))
 
         if faces is not None:
-            format = struct.Struct("<B3I")
             for tri in faces.tolist():
                 f.write(format.pack(len(tri), *tri))
-
+            format = struct.Struct("<B3I")
     return output_ply_path
 
 
@@ -774,11 +773,19 @@ def enable_full_determinism():
     Helper function for reproducible behavior during distributed training. See
     - https://pytorch.org/docs/stable/notes/randomness.html for pytorch
     """
-    ms.set_context(deterministic="ON", pynative_synchronize=True)
+    logger.warning(
+        "enable_full_determinism has been moved to mindone.diffusers.utils.mindspore_utils. "
+        "Importing from mindone.diffusers.utils.testing_utils is deprecated and will be removed in a future version."
+    )
+    ms.set_deterministic(True)
 
 
 def disable_full_determinism():
-    ms.set_context(deterministic="OFF", pynative_synchronize=False)
+    logger.warning(
+        "disable_full_determinism has been moved to mindone.diffusers.utils.mindspore_utils. "
+        "Importing from mindone.diffusers.utils.testing_utils is deprecated and will be removed in a future version."
+    )
+    ms.set_deterministic(False)
 
 
 def load_numpy_from_local_file(repo_id, filename, subfolder=None):

@@ -767,13 +767,13 @@ class ShapEParamsProjModel(ModelMixin, ConfigMixin):
     def __init__(
         self,
         *,
-        param_names: Tuple[str] = (
+        param_names: Tuple[str, ...] = (
             "nerstf.mlp.0.weight",
             "nerstf.mlp.1.weight",
             "nerstf.mlp.2.weight",
             "nerstf.mlp.3.weight",
         ),
-        param_shapes: Tuple[Tuple[int]] = (
+        param_shapes: Tuple[Tuple[int, int], ...] = (
             (256, 93),
             (256, 256),
             (256, 256),
@@ -812,13 +812,13 @@ class ShapERenderer(ModelMixin, ConfigMixin):
     def __init__(
         self,
         *,
-        param_names: Tuple[str] = (
+        param_names: Tuple[str, ...] = (
             "nerstf.mlp.0.weight",
             "nerstf.mlp.1.weight",
             "nerstf.mlp.2.weight",
             "nerstf.mlp.3.weight",
         ),
-        param_shapes: Tuple[Tuple[int]] = (
+        param_shapes: Tuple[Tuple[int, int], ...] = (
             (256, 93),
             (256, 256),
             (256, 256),
@@ -830,7 +830,7 @@ class ShapERenderer(ModelMixin, ConfigMixin):
         n_hidden_layers: int = 6,
         act_fn: str = "swish",
         insert_direction_at: int = 4,
-        background: Tuple[float] = (
+        background: Tuple[float, ...] = (
             255.0,
             255.0,
             255.0,

@@ -73,15 +73,14 @@ class MarigoldDepthOutput(BaseOutput):
 
     Args:
         prediction (`np.ndarray`, `ms.Tensor`):
-            Predicted depth maps with values in the range [0, 1]. The shape is $numimages \times 1 \times height \times
-            width$ for `ms.Tensor` or $numimages \times height \times width \times 1$ for `np.ndarray`.
+            Predicted depth maps with values in the range [0, 1]. The shape is `numimages × 1 × height × width` for
+            `ms.Tensor` or `numimages × height × width × 1` for `np.ndarray`.
         uncertainty (`None`, `np.ndarray`, `ms.Tensor`):
-            Uncertainty maps computed from the ensemble, with values in the range [0, 1]. The shape is $numimages
-            \times 1 \times height \times width$ for `ms.Tensor` or $numimages \times height \times width \times 1$
-            for `np.ndarray`.
+            Uncertainty maps computed from the ensemble, with values in the range [0, 1]. The shape is `numimages × 1 ×
+            height × width` for `ms.Tensor` or `numimages × height × width × 1` for `np.ndarray`.
         latent (`None`, `ms.Tensor`):
             Latent features corresponding to the predictions, compatible with the `latents` argument of the pipeline.
-            The shape is $numimages * numensemble \times 4 \times latentheight \times latentwidth$.
+            The shape is `numimages * numensemble × 4 × latentheight × latentwidth`.
     """
 
     prediction: Union[np.ndarray, ms.Tensor]

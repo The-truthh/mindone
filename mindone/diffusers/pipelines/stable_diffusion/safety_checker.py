@@ -20,7 +20,7 @@ from mindspore import Parameter, Tensor, mint, ops
 
 from mindone.transformers import CLIPVisionModel, MSPreTrainedModel
 
-from ...utils import logging
+from ...utils import is_transformers_version, logging
 
 logger = logging.get_logger(__name__)
 
@@ -49,6 +49,9 @@ class StableDiffusionSafetyChecker(MSPreTrainedModel):
 
         self.concept_embeds_weights = Parameter(mint.ones(17), requires_grad=False)
         self.special_care_embeds_weights = Parameter(mint.ones(3), requires_grad=False)
+        # Model requires post_init after transformers v4.57.3
+        if is_transformers_version(">", "4.57.3"):
+            self.post_init()
 
     # TODO: this is the onnx version of pytorch implementation, which works well in the graph.
     def construct(self, clip_input: Tensor, images: Tensor):

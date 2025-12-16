@@ -24,12 +24,13 @@ Key Features:
         - **unflatten**: Always custom due to framework limitations.
         [2025/10/22]
         - **RMSNorm**: Always custom due to framework limitations.
+        [2025/10/28]
+        - **scaled_dot_product_attention**
         [2025/11/12]
         - **scaled_dot_product_attention**: Always custom due to framework limitations.
         - **DeviceMesh**: Always custom due to framework limitations.
-
-        [2025/10/28]
-        - **scaled_dot_product_attention**
+        [2025/12/15]
+        - **center_crop**: Always custom due to framework limitations.
 
 Example:
     Import this module and use the operators as you would with native MindSpore functions, with the assurance of cross-version compatibility.
@@ -44,12 +45,13 @@ Todo:
 
 import math
 import numbers
-from typing import Optional, Union
+from typing import Optional, Union, Tuple, List
 
 from packaging.version import parse
 
 import mindspore as ms
 from mindspore import mint, nn, ops
+import mindspore.mint.nn.functional as F
 from mindspore._c_expression.amp import AmpLevel, create_amp_strategy
 from mindspore.common.api import _function_forbid_reuse
 from mindspore.common.initializer import One, initializer
@@ -72,6 +74,7 @@ __all__ = [
     "RMSNorm",
     "scaled_dot_product_attention",
     "DeviceMesh",
+    "center_crop",
 ]
 
 MINDSPORE_VERSION = parse(ms.__version__)
@@ -870,3 +873,62 @@ def flash_attention_op(
     return ops.operations.nn_ops.FlashAttentionScore(
         head_num=head_num, keep_prob=keep_prob, scale_value=scale, input_layout=input_layout
     )(query, key, value, None, None, None, attn_mask)[3]
+
+
+def _get_dimensions(img: ms.Tensor) -> Tuple[int, int, int]:
+    if img.ndim < 2:
+        raise ValueError("Input image must have at least H, W dimensions.")
+        
+    H = img.shape[-2]
+    W = img.shape[-1]
+    C = img.shape[-3] if img.ndim >= 3 else 1
+    
+    return C, H, W
+
+def _pad(img: ms.Tensor, padding_ltrb: List[int], fill: float = 0.0) -> ms.Tensor:
+    left, top, right, bottom = padding_ltrb
+    padding = [left, right, top, bottom]
+    return F.pad(img, padding, mode='constant', value=fill)
+
+
+def _crop(img: ms.Tensor, top: int, left: int, height: int, width: int) -> ms.Tensor:
+    # Height slice: [top : top + height]
+    # Width slice: [left : left + width]
+    return img[..., top: top + height, left: left + width]
+
+
+def center_crop(
+    img: ms.Tensor, 
+    output_size: Union[int, List[int], Tuple[int, int]]
+) -> ms.Tensor:
+    """
+    Equivalent implementation of torchvision.transforms.functional.center_crop 
+    including the padding logic.
+    """
+
+    if isinstance(output_size, numbers.Number):
+        output_size = (int(output_size), int(output_size))
+    elif isinstance(output_size, (tuple, list)) and len(output_size) == 1:
+        output_size = (output_size[0], output_size[0])
+
+    _, image_height, image_width = _get_dimensions(img)
+    crop_height, crop_width = output_size
+        
+    if crop_width > image_width or crop_height > image_height:
+        
+        padding_ltrb = [
+            (crop_width - image_width) // 2 if crop_width > image_width else 0,
+            (crop_height - image_height) // 2 if crop_height > image_height else 0,
+            (crop_width - image_width + 1) // 2 if crop_width > image_width else 0,
+            (crop_height - image_height + 1) // 2 if crop_height > image_height else 0,
+        ]
+
+        img = _pad(img, padding_ltrb, fill=0)  
+        _, image_height, image_width = _get_dimensions(img)
+        if crop_width == image_width and crop_height == image_height:
+            return img
+    
+    crop_top = int(mint.round(ms.tensor((image_height - crop_height) / 2.0)).item())
+    crop_left = int(mint.round(ms.tensor((image_width - crop_width) / 2.0)).item())
+
+    return _crop(img, crop_top, crop_left, crop_height, crop_width)

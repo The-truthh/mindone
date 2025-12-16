@@ -507,6 +507,11 @@ class StableDiffusionUpscalePipeline(
         return latents
 
     def upcast_vae(self):
+        deprecate(
+            "upcast_vae",
+            "1.0.0",
+            "`upcast_vae` is deprecated. Please use `pipe.vae.to(ms.float32)`.",
+        )
         self.vae.to(dtype=ms.float32)
 
     def __call__(

@@ -17,24 +17,28 @@ from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 import regex as re
-from transformers import CLIPTokenizer, Qwen2VLProcessor
-
 import mindspore as ms
 from mindspore import mint
 from mindspore.mint.nn import functional as F
-
+from transformers import CLIPTokenizer, Qwen2VLProcessor
 from mindone.transformers import CLIPTextModel, Qwen2_5_VLForConditionalGeneration
 
 from ...callbacks import MultiPipelineCallbacks, PipelineCallback
+from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import KandinskyLoraLoaderMixin
-from ...models import AutoencoderKLHunyuanVideo
+from ...models import AutoencoderKL
 from ...models.transformers import Kandinsky5Transformer3DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
-from ...utils import is_ftfy_available, logging
+
+# Add imports for offloading and tiling
+from ...utils import (
+    is_ftfy_available,
+    logging,
+)
 from ...utils.mindspore_utils import randn_tensor
-from ...video_processor import VideoProcessor
 from ..pipeline_utils import DiffusionPipeline
-from .pipeline_output import KandinskyPipelineOutput
+from .pipeline_output import KandinskyImagePipelineOutput
+
 
 XLA_AVAILABLE = False
 
@@ -51,37 +55,25 @@ EXAMPLE_DOC_STRING = """
 
         ```python
         >>> import mindspore as ms
-        >>> from mindone.diffusers import Kandinsky5T2VPipeline
-        >>> from mindone.diffusers.utils import export_to_video
+        >>> from mindone.diffusers import Kandinsky5I2IPipeline
 
         >>> # Available models:
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-nocfg-5s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-distilled16steps-5s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-pretrain-5s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-sft-10s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-nocfg-10s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-distilled16steps-10s-Diffusers
-        >>> # kandinskylab/Kandinsky-5.0-T2V-Lite-pretrain-10s-Diffusers
+        >>> # kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers
+        >>> # kandinskylab/Kandinsky-5.0-I2I-Lite-pretrain-Diffusers
 
-        >>> model_id = "kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers"
-        >>> pipe = Kandinsky5T2VPipeline.from_pretrained(model_id, mindspore_dtype=ms.bfloat16)
+        >>> model_id = "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers"
+        >>> pipe = Kandinsky5I2IPipeline.from_pretrained(model_id, mindspore_dtype=ms.bfloat16)
 
         >>> prompt = "A cat and a dog baking a cake together in a kitchen."
-        >>> negative_prompt = "Static, 2D cartoon, cartoon, 2d animation, paintings, images, worst quality, low quality, ugly, deformed, walking backwards"
 
         >>> output = pipe(
         ...     prompt=prompt,
-        ...     negative_prompt=negative_prompt,
-        ...     height=512,
-        ...     width=768,
-        ...     num_frames=121,
+        ...     negative_prompt="",
+        ...     height=1024,
+        ...     width=1024,
         ...     num_inference_steps=50,
-        ...     guidance_scale=5.0,
-        ... )[0][0]
-
-        >>> export_to_video(output, "output.mp4", fps=24, quality=9)
+        ...     guidance_scale=3.5,
+        ... ).frames[0]
         ```
 """
 
@@ -119,20 +111,20 @@ def prompt_clean(text):
     return text
 
 
-class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
+class Kandinsky5I2IPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
     r"""
-    Pipeline for text-to-video generation using Kandinsky 5.0.
+    Pipeline for image-to-image generation using Kandinsky 5.0.
 
     This model inherits from [`DiffusionPipeline`]. Check the superclass documentation for the generic methods
     implemented for all pipelines (downloading, saving, running on a particular device, etc.).
 
     Args:
         transformer ([`Kandinsky5Transformer3DModel`]):
-            Conditional Transformer to denoise the encoded video latents.
-        vae ([`AutoencoderKLHunyuanVideo`]):
-            Variational Auto-Encoder Model [hunyuanvideo-community/HunyuanVideo
-            (vae)](https://huggingface.co/hunyuanvideo-community/HunyuanVideo) to encode and decode videos to and from
-            latent representations.
+            Conditional Transformer to denoise the encoded image latents.
+        vae ([`AutoencoderKL`]):
+            Variational Auto-Encoder Model [black-forest-labs/FLUX.1-dev
+            (vae)](https://huggingface.co/black-forest-labs/FLUX.1-dev) to encode and decode videos to and from latent
+            representations.
         text_encoder ([`Qwen2_5_VLForConditionalGeneration`]):
             Frozen text-encoder [Qwen2.5-VL](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct).
         tokenizer ([`AutoProcessor`]):
@@ -143,7 +135,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         tokenizer_2 ([`CLIPTokenizer`]):
             Tokenizer for CLIP.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded video latents.
+            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
     """
 
     model_cpu_offload_seq = "text_encoder->text_encoder_2->transformer->vae"
@@ -158,7 +150,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
     def __init__(
         self,
         transformer: Kandinsky5Transformer3DModel,
-        vae: AutoencoderKLHunyuanVideo,
+        vae: AutoencoderKL,
         text_encoder: Qwen2_5_VLForConditionalGeneration,
         tokenizer: Qwen2VLProcessor,
         text_encoder_2: CLIPTextModel,
@@ -176,143 +168,29 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             tokenizer_2=tokenizer_2,
             scheduler=scheduler,
         )
+        self.prompt_template = "<|im_start|>system\nYou are a promt engineer. Based on the provided source image (first image) and target image (second image), create an interesting text prompt that can be used together with the source image to create the target image:<|im_end|><|im_start|>user{}<|vision_start|><|image_pad|><|vision_end|><|im_end|>"
+        self.prompt_template_encode_start_idx = 55
 
-        self.prompt_template = "\n".join(
-            [
-                "<|im_start|>system\nYou are a promt engineer. Describe the video in detail.",
-                "Describe how the camera moves or shakes, describe the zoom and view angle, whether it follows the objects.",
-                "Describe the location of the video, main characters or objects and their action.",
-                "Describe the dynamism of the video and presented actions.",
-                "Name the visual style of the video: whether it is a professional footage, user generated content, some kind of animation, video game or scren content.",  # noqa
-                "Describe the visual effects, postprocessing and transitions if they are presented in the video.",
-                "Pay attention to the order of key actions shown in the scene.<|im_end|>",
-                "<|im_start|>user\n{}<|im_end|>",
-            ]
-        )
-        self.prompt_template_encode_start_idx = 129
-
-        self.vae_scale_factor_temporal = (
-            self.vae.config.temporal_compression_ratio if getattr(self, "vae", None) else 4
-        )
-        self.vae_scale_factor_spatial = self.vae.config.spatial_compression_ratio if getattr(self, "vae", None) else 8
-        self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
-
-    def _get_scale_factor(self, height: int, width: int) -> tuple:
-        """
-        Calculate the scale factor based on resolution.
-
-        Args:
-            height (int): Video height
-            width (int): Video width
-
-        Returns:
-            tuple: Scale factor as (temporal_scale, height_scale, width_scale)
-        """
-
-        def between_480p(x):
-            return 480 <= x <= 854
-
-        if between_480p(height) and between_480p(width):
-            return (1, 2, 2)
-        else:
-            return (1, 3.16, 3.16)
-
-    @staticmethod
-    def fast_sta_nabla(T: int, H: int, W: int, wT: int = 3, wH: int = 3, wW: int = 3) -> ms.Tensor:
-        """
-        Create a sparse temporal attention (STA) mask for efficient video generation.
-
-        This method generates a mask that limits attention to nearby frames and spatial positions, reducing
-        computational complexity for video generation.
-
-        Args:
-            T (int): Number of temporal frames
-            H (int): Height in latent space
-            W (int): Width in latent space
-            wT (int): Temporal attention window size
-            wH (int): Height attention window size
-            wW (int): Width attention window size
-
-        Returns:
-            ms.Tensor: Sparse attention mask of shape (T*H*W, T*H*W)
-        """
-        l = ms.tensor([T, H, W]).amax()  # noqa
-        r = mint.arange(0, l, 1, dtype=ms.int16)
-        mat = (r.unsqueeze(1) - r.unsqueeze(0)).abs()
-        sta_t, sta_h, sta_w = (
-            mat[:T, :T].flatten(),
-            mat[:H, :H].flatten(),
-            mat[:W, :W].flatten(),
-        )
-        sta_t = sta_t <= wT // 2
-        sta_h = sta_h <= wH // 2
-        sta_w = sta_w <= wW // 2
-        sta_hw = (sta_h.unsqueeze(1) * sta_w.unsqueeze(0)).reshape(H, H, W, W).transpose(1, 2).flatten()
-        sta = (sta_t.unsqueeze(1) * sta_hw.unsqueeze(0)).reshape(T, T, H * W, H * W).transpose(1, 2)
-        return sta.reshape(T * H * W, T * H * W)
-
-    def get_sparse_params(self, sample):
-        """
-        Generate sparse attention parameters for the transformer based on sample dimensions.
-
-        This method computes the sparse attention configuration needed for efficient video processing in the
-        transformer model.
-
-        Args:
-            sample (ms.Tensor): Input sample tensor
-
-        Returns:
-            Dict: Dictionary containing sparse attention parameters
-        """
-        assert self.transformer.config.patch_size[0] == 1
-        B, T, H, W, _ = sample.shape
-        T, H, W = (
-            T // self.transformer.config.patch_size[0],
-            H // self.transformer.config.patch_size[1],
-            W // self.transformer.config.patch_size[2],
-        )
-        if self.transformer.config.attention_type == "nabla":
-            sta_mask = self.fast_sta_nabla(
-                T,
-                H // 8,
-                W // 8,
-                self.transformer.config.attention_wT,
-                self.transformer.config.attention_wH,
-                self.transformer.config.attention_wW,
-            )
-
-            sparse_params = {
-                "sta_mask": sta_mask.unsqueeze_(0).unsqueeze_(0),
-                "attention_type": self.transformer.config.attention_type,
-                "to_fractal": True,
-                "P": self.transformer.config.attention_P,
-                "wT": self.transformer.config.attention_wT,
-                "wW": self.transformer.config.attention_wW,
-                "wH": self.transformer.config.attention_wH,
-                "add_sta": self.transformer.config.attention_add_sta,
-                "visual_shape": (T, H, W),
-                "method": self.transformer.config.attention_method,
-            }
-        else:
-            sparse_params = None
-
-        return sparse_params
+        self.vae_scale_factor_spatial = 8
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
+        self.resolutions = [(1024, 1024), (640, 1408), (1408, 640), (768, 1280), (1280, 768), (896, 1152), (1152, 896)]
 
     def _encode_prompt_qwen(
         self,
-        prompt: Union[str, List[str]],
-        max_sequence_length: int = 256,
+        prompt: List[str],
+        image: Optional[PipelineImageInput] = None,
+        max_sequence_length: int = 1024,
         dtype: Optional[ms.Type] = None,
     ):
         """
         Encode prompt using Qwen2.5-VL text encoder.
 
         This method processes the input prompt through the Qwen2.5-VL model to generate text embeddings suitable for
-        video generation.
+        image generation.
 
         Args:
-            prompt (Union[str, List[str]]): Input prompt or list of prompts
-            num_videos_per_prompt (int): Number of videos to generate per prompt
+            prompt List[str]: Input list of prompts
+            image (PipelineImageInput): Input list of images to condition the generation on
             max_sequence_length (int): Maximum sequence length for tokenization
             dtype (ms.Type): Data type for embeddings
 
@@ -320,13 +198,15 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             Tuple[ms.Tensor, ms.Tensor]: Text embeddings and cumulative sequence lengths
         """
         dtype = dtype or self.text_encoder.dtype
-
+        if not isinstance(image, list):
+            image = [image]
+        image = [i.resize((i.size[0] // 2, i.size[1] // 2)) for i in image]
         full_texts = [self.prompt_template.format(p) for p in prompt]
         max_allowed_len = self.prompt_template_encode_start_idx + max_sequence_length
 
         untruncated_ids = self.tokenizer(
             text=full_texts,
-            images=None,
+            images=image,
             videos=None,
             return_tensors="np",
             padding="longest",
@@ -334,8 +214,10 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
 
         if untruncated_ids.shape[-1] > max_allowed_len:
             for i, text in enumerate(full_texts):
-                tokens = untruncated_ids[i][self.prompt_template_encode_start_idx : -2]
-                removed_text = self.tokenizer.decode(tokens[max_sequence_length - 2 :])
+                tokens = untruncated_ids[i]
+                num_image_tokens = (tokens == self.tokenizer.image_token_id).sum()
+                tokens = tokens[tokens != self.tokenizer.image_token_id][self.prompt_template_encode_start_idx : -3]
+                removed_text = self.tokenizer.decode(tokens[max_sequence_length - num_image_tokens - 3 :])
                 if len(removed_text) > 0:
                     full_texts[i] = text[: -len(removed_text)]
                     logger.warning(
@@ -345,21 +227,22 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
 
         inputs = self.tokenizer(
             text=full_texts,
-            images=None,
+            images=image,
             videos=None,
             max_length=max_allowed_len,
             truncation=True,
             return_tensors="np",
             padding=True,
         )
+        inputs = {k: ms.tensor(v, dtype) for k, v in inputs.items()}
 
         embeds = self.text_encoder(
-            input_ids=ms.tensor(inputs["input_ids"]),
+            **inputs,
             return_dict=True,
             output_hidden_states=True,
         )["hidden_states"][-1][:, self.prompt_template_encode_start_idx :]
 
-        attention_mask = ms.tensor(inputs["attention_mask"][:, self.prompt_template_encode_start_idx :])
+        attention_mask = inputs["attention_mask"][:, self.prompt_template_encode_start_idx :]
         cu_seqlens = mint.cumsum(attention_mask.sum(1), dim=0)
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0).to(dtype=ms.int32)
 
@@ -378,7 +261,6 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
 
         Args:
             prompt (Union[str, List[str]]): Input prompt or list of prompts
-            num_videos_per_prompt (int): Number of videos to generate per prompt
             dtype (ms.Type): Data type for embeddings
 
         Returns:
@@ -394,41 +276,42 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             padding="max_length",
             return_tensors="np",
         )
-        inputs = {k: ms.tensor(v) for k, v in inputs.items()}
+        inputs = {k: ms.tensor(v, dtype) for k, v in inputs.items()}
 
-        pooled_embed = self.text_encoder_2(**inputs, return_dict=True)["pooler_output"]
+        pooled_embed = self.text_encoder_2(**inputs)["pooler_output"]
 
         return pooled_embed.to(dtype)
 
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],
-        num_videos_per_prompt: int = 1,
-        max_sequence_length: int = 512,
+        image: ms.Tensor,
+        num_images_per_prompt: int = 1,
+        max_sequence_length: int = 1024,
         dtype: Optional[ms.Type] = None,
     ):
         r"""
         Encodes a single prompt (positive or negative) into text encoder hidden states.
 
         This method combines embeddings from both Qwen2.5-VL and CLIP text encoders to create comprehensive text
-        representations for video generation.
+        representations for image generation.
 
         Args:
             prompt (`str` or `List[str]`):
                 Prompt to be encoded.
-            num_videos_per_prompt (`int`, *optional*, defaults to 1):
-                Number of videos to generate per prompt.
-            max_sequence_length (`int`, *optional*, defaults to 512):
-                Maximum sequence length for text encoding.
+            num_images_per_prompt (`int`, *optional*, defaults to 1):
+                Number of images to generate per prompt.
+            max_sequence_length (`int`, *optional*, defaults to 1024):
+                Maximum sequence length for text encoding. Must be less than 1024
             dtype (`ms.Type`, *optional*):
                 MindSpore dtype.
 
         Returns:
             Tuple[ms.Tensor, ms.Tensor, ms.Tensor]:
-                - Qwen text embeddings of shape (batch_size * num_videos_per_prompt, sequence_length, embedding_dim)
-                - CLIP pooled embeddings of shape (batch_size * num_videos_per_prompt, clip_embedding_dim)
+                - Qwen text embeddings of shape (batch_size * num_images_per_prompt, sequence_length, embedding_dim)
+                - CLIP pooled embeddings of shape (batch_size * num_images_per_prompt, clip_embedding_dim)
                 - Cumulative sequence lengths (`cu_seqlens`) for Qwen embeddings of shape (batch_size *
-                  num_videos_per_prompt + 1,)
+                  num_images_per_prompt + 1,)
         """
         dtype = dtype or self.text_encoder.dtype
 
@@ -442,6 +325,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         # Encode with Qwen2.5-VL
         prompt_embeds_qwen, prompt_cu_seqlens = self._encode_prompt_qwen(
             prompt=prompt,
+            image=image,
             max_sequence_length=max_sequence_length,
             dtype=dtype,
         )
@@ -454,34 +338,34 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         )
         # prompt_embeds_clip shape: [batch_size, clip_embed_dim]
 
-        # Repeat embeddings for num_videos_per_prompt
-        # Qwen embeddings: repeat sequence for each video, then reshape
+        # Repeat embeddings for num_images_per_prompt
+        # Qwen embeddings: repeat sequence for each image, then reshape
         prompt_embeds_qwen = prompt_embeds_qwen.repeat(
-            1, num_videos_per_prompt, 1
-        )  # [batch_size, seq_len * num_videos_per_prompt, embed_dim]
-        # Reshape to [batch_size * num_videos_per_prompt, seq_len, embed_dim]
+            1, num_images_per_prompt, 1
+        )  # [batch_size, seq_len * num_images_per_prompt, embed_dim]
+        # Reshape to [batch_size * num_images_per_prompt, seq_len, embed_dim]
         prompt_embeds_qwen = prompt_embeds_qwen.view(
-            batch_size * num_videos_per_prompt, -1, prompt_embeds_qwen.shape[-1]
+            batch_size * num_images_per_prompt, -1, prompt_embeds_qwen.shape[-1]
         )
 
-        # CLIP embeddings: repeat for each video
+        # CLIP embeddings: repeat for each image
         prompt_embeds_clip = prompt_embeds_clip.repeat(
-            1, num_videos_per_prompt, 1
-        )  # [batch_size, num_videos_per_prompt, clip_embed_dim]
-        # Reshape to [batch_size * num_videos_per_prompt, clip_embed_dim]
-        prompt_embeds_clip = prompt_embeds_clip.view(batch_size * num_videos_per_prompt, -1)
+            1, num_images_per_prompt, 1
+        )  # [batch_size, num_images_per_prompt, clip_embed_dim]
+        # Reshape to [batch_size * num_images_per_prompt, clip_embed_dim]
+        prompt_embeds_clip = prompt_embeds_clip.view(batch_size * num_images_per_prompt, -1)
 
-        # Repeat cumulative sequence lengths for num_videos_per_prompt
-        # Original cu_seqlens: [0, len1, len1+len2, ...]
-        # Need to repeat the differences and reconstruct for repeated prompts
+        # Repeat cumulative sequence lengths for num_images_per_prompt
         # Original differences (lengths) for each prompt in the batch
         original_lengths = prompt_cu_seqlens.diff()  # [len1, len2, ...]
-        # Repeat the lengths for num_videos_per_prompt
+        # Repeat the lengths for num_images_per_prompt
         repeated_lengths = original_lengths.repeat_interleave(
-            num_videos_per_prompt
+            num_images_per_prompt
         )  # [len1, len1, ..., len2, len2, ...]
         # Reconstruct the cumulative lengths
-        repeated_cu_seqlens = mint.cat([ms.tensor([0], dtype=ms.int32), repeated_lengths.cumsum(0)])
+        repeated_cu_seqlens = mint.cat(
+            [ms.tensor([0], dtype=ms.int32), repeated_lengths.cumsum(0)]
+        )
 
         return prompt_embeds_qwen, prompt_embeds_clip, repeated_cu_seqlens
 
@@ -489,6 +373,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         self,
         prompt,
         negative_prompt,
+        image,
         height,
         width,
         prompt_embeds_qwen=None,
@@ -506,8 +391,9 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         Args:
             prompt: Input prompt
             negative_prompt: Negative prompt for guidance
-            height: Video height
-            width: Video width
+            image: Input image for conditioning
+            height: Image height
+            width: Image width
             prompt_embeds_qwen: Pre-computed Qwen prompt embeddings
             prompt_embeds_clip: Pre-computed CLIP prompt embeddings
             negative_prompt_embeds_qwen: Pre-computed Qwen negative prompt embeddings
@@ -523,14 +409,20 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         if max_sequence_length is not None and max_sequence_length > 1024:
             raise ValueError("max_sequence_length must be less than 1024")
 
-        if height % 16 != 0 or width % 16 != 0:
-            raise ValueError(f"`height` and `width` have to be divisible by 16 but are {height} and {width}.")
+        if image is None:
+            raise ValueError("`image` must be provided for image-to-image generation")
+
+        if (width, height) not in self.resolutions:
+            resolutions_str = ",".join([f"({w},{h})" for w, h in self.resolutions])
+            logger.warning(
+                f"`height` and `width` have to be one of {resolutions_str}, but are {height} and {width}. Dimensions will be resized accordingly"
+            )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
             k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
         ):
             raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"  # noqa
+                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
             )
 
         # Check for consistency within positive prompt embeddings and sequence lengths
@@ -573,66 +465,68 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
 
     def prepare_latents(
         self,
+        image: PipelineImageInput,
         batch_size: int,
         num_channels_latents: int = 16,
-        height: int = 480,
-        width: int = 832,
-        num_frames: int = 81,
+        height: int = 1024,
+        width: int = 1024,
         dtype: Optional[ms.Type] = None,
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         latents: Optional[ms.Tensor] = None,
     ) -> ms.Tensor:
         """
-        Prepare initial latent variables for video generation.
+        Prepare initial latent variables for image-to-image generation.
 
-        This method creates random noise latents or uses provided latents as starting point for the denoising process.
+        This method creates random noise latents with encoded image,
 
         Args:
-            batch_size (int): Number of videos to generate
+            image (PipelineImageInput): Input image to condition the generation on
+            batch_size (int): Number of images to generate
             num_channels_latents (int): Number of channels in latent space
-            height (int): Height of generated video
-            width (int): Width of generated video
-            num_frames (int): Number of frames in video
+            height (int): Height of generated image
+            width (int): Width of generated image
             dtype (ms.Type): Data type for latents
             generator (np.random.Generator): Random number generator
             latents (ms.Tensor): Pre-existing latents to use
 
         Returns:
-            ms.Tensor: Prepared latent tensor
+            ms.Tensor: Prepared latent tensor with encoded image
         """
         if latents is not None:
             return latents.to(dtype=dtype)
 
-        num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
         shape = (
             batch_size,
-            num_latent_frames,
+            1,
             int(height) // self.vae_scale_factor_spatial,
             int(width) // self.vae_scale_factor_spatial,
             num_channels_latents,
         )
+
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
                 f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
+        # Generate random noise for all frames
         latents = randn_tensor(shape, generator=generator, dtype=dtype)
 
-        if self.transformer.visual_cond:
-            # For visual conditioning, concatenate with zeros and mask
-            visual_cond = mint.zeros_like(latents)
-            visual_cond_mask = mint.zeros(
-                [
-                    batch_size,
-                    num_latent_frames,
-                    int(height) // self.vae_scale_factor_spatial,
-                    int(width) // self.vae_scale_factor_spatial,
-                    1,
-                ],
-                dtype=latents.dtype,
-            )
-            latents = mint.cat([latents, visual_cond, visual_cond_mask], dim=-1)
+        # Encode the input image to use as first frame
+        # Preprocess image
+        image_tensor = self.image_processor.preprocess(image, height=height, width=width).to(dtype=dtype)
+        # Encode image to latents using VAE
+        with ms._no_grad():
+            image_latents = self.vae.diag_gauss_dist.sample(self.vae.encode(image_tensor)[0], generator=generator)
+            image_latents = image_latents.unsqueeze(2)  # Add temporal dimension
+
+            # Normalize latents if needed
+            if hasattr(self.vae.config, "scaling_factor"):
+                image_latents = image_latents * self.vae.config.scaling_factor
+
+            # Reshape to match latent dimensions [batch, 1, height, width, channels]
+            image_latents = image_latents.permute(0, 2, 3, 4, 1)  # [batch, 1, H, W, C]
+            latents = mint.cat([latents, image_latents, mint.ones_like(latents[..., :1])], -1)
 
         return latents
 
@@ -654,14 +548,14 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
     @ms._no_grad()
     def __call__(
         self,
+        image: PipelineImageInput,
         prompt: Union[str, List[str]] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
-        height: int = 512,
-        width: int = 768,
-        num_frames: int = 121,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
         num_inference_steps: int = 50,
-        guidance_scale: float = 5.0,
-        num_videos_per_prompt: Optional[int] = 1,
+        guidance_scale: float = 3.5,
+        num_images_per_prompt: Optional[int] = 1,
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         latents: Optional[ms.Tensor] = None,
         prompt_embeds_qwen: Optional[ms.Tensor] = None,
@@ -671,67 +565,77 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         prompt_cu_seqlens: Optional[ms.Tensor] = None,
         negative_prompt_cu_seqlens: Optional[ms.Tensor] = None,
         output_type: Optional[str] = "pil",
-        return_dict: bool = False,
+        return_dict: bool = True,
         callback_on_step_end: Optional[
             Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        max_sequence_length: int = 512,
+        max_sequence_length: int = 1024,
     ):
         r"""
-        The call function to the pipeline for generation.
+        The call function to the pipeline for image-to-image generation.
 
         Args:
+            image (`PipelineImageInput`):
+                The input image to condition the generation on. Must be an image, a list of images or a `ms.Tensor`.
             prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts to guide the video generation. If not defined, pass `prompt_embeds` instead.
+                The prompt or prompts to guide the image generation. If not defined, pass `prompt_embeds` instead.
             negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts to avoid during video generation. If not defined, pass `negative_prompt_embeds`
+                The prompt or prompts to avoid during image generation. If not defined, pass `negative_prompt_embeds`
                 instead. Ignored when not using guidance (`guidance_scale` < `1`).
-            height (`int`, defaults to `512`):
-                The height in pixels of the generated video.
-            width (`int`, defaults to `768`):
-                The width in pixels of the generated video.
-            num_frames (`int`, defaults to `25`):
-                The number of frames in the generated video.
+            height (`int`):
+                The height in pixels of the generated image.
+            width (`int`):
+                The width in pixels of the generated image.
             num_inference_steps (`int`, defaults to `50`):
                 The number of denoising steps.
             guidance_scale (`float`, defaults to `5.0`):
                 Guidance scale as defined in classifier-free guidance.
-            num_videos_per_prompt (`int`, *optional*, defaults to 1):
-                The number of videos to generate per prompt.
+            num_images_per_prompt (`int`, *optional*, defaults to 1):
+                The number of images to generate per prompt.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
                 A numpy random generator to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents.
-            prompt_embeds (`ms.Tensor`, *optional*):
-                Pre-generated text embeddings.
-            negative_prompt_embeds (`ms.Tensor`, *optional*):
-                Pre-generated negative text embeddings.
+            prompt_embeds_qwen (`ms.Tensor`, *optional*):
+                Pre-generated Qwen text embeddings.
+            prompt_embeds_clip (`ms.Tensor`, *optional*):
+                Pre-generated CLIP text embeddings.
+            negative_prompt_embeds_qwen (`ms.Tensor`, *optional*):
+                Pre-generated Qwen negative text embeddings.
+            negative_prompt_embeds_clip (`ms.Tensor`, *optional*):
+                Pre-generated CLIP negative text embeddings.
+            prompt_cu_seqlens (`ms.Tensor`, *optional*):
+                Pre-generated cumulative sequence lengths for Qwen positive prompt.
+            negative_prompt_cu_seqlens (`ms.Tensor`, *optional*):
+                Pre-generated cumulative sequence lengths for Qwen negative prompt.
             output_type (`str`, *optional*, defaults to `"pil"`):
-                The output format of the generated video.
-            return_dict (`bool`, *optional*, defaults to `False`):
-                Whether or not to return a [`KandinskyPipelineOutput`].
+                The output format of the generated image.
+            return_dict (`bool`, *optional*, defaults to `True`):
+                Whether or not to return a [`KandinskyImagePipelineOutput`].
             callback_on_step_end (`Callable`, `PipelineCallback`, `MultiPipelineCallbacks`, *optional*):
                 A function that is called at the end of each denoising step.
             callback_on_step_end_tensor_inputs (`List`, *optional*):
                 The list of tensor inputs for the `callback_on_step_end` function.
-            max_sequence_length (`int`, defaults to `512`):
-                The maximum sequence length for text encoding.
+            max_sequence_length (`int`, defaults to `1024`):
+                The maximum sequence length for text and image qwen encoding. Must be less than 1024
 
         Examples:
 
         Returns:
-            [`~KandinskyPipelineOutput`] or `tuple`:
-                If `return_dict` is `True`, [`KandinskyPipelineOutput`] is returned, otherwise a `tuple` is returned
-                where the first element is a list with the generated images.
+            [`~KandinskyImagePipelineOutput`] or `tuple`:
+                If `return_dict` is `True`, [`KandinskyImagePipelineOutput`] is returned, otherwise a `tuple` is
+                returned where the first element is a list with the generated images.
         """
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
-
         # 1. Check inputs. Raise error if not correct
+        if height is None and width is None:
+            width, height = image[0].size if isinstance(image, list) else image.size
         self.check_inputs(
             prompt=prompt,
             negative_prompt=negative_prompt,
+            image=image,
             height=height,
             width=width,
             prompt_embeds_qwen=prompt_embeds_qwen,
@@ -743,13 +647,10 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
             max_sequence_length=max_sequence_length,
         )
-
-        if num_frames % self.vae_scale_factor_temporal != 1:
-            logger.warning(
-                f"`num_frames - 1` has to be divisible by {self.vae_scale_factor_temporal}. Rounding to the nearest number."
-            )
-            num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
-        num_frames = max(num_frames, 1)
+        if (width, height) not in self.resolutions:
+            width, height = self.resolutions[
+                np.argmin([abs((i[0] / i[1]) - (width / height)) for i in self.resolutions])
+            ]
 
         self._guidance_scale = guidance_scale
         self._interrupt = False
@@ -769,13 +670,15 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         if prompt_embeds_qwen is None:
             prompt_embeds_qwen, prompt_embeds_clip, prompt_cu_seqlens = self.encode_prompt(
                 prompt=prompt,
+                image=image,
+                num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
                 dtype=dtype,
             )
 
         if self.guidance_scale > 1.0:
             if negative_prompt is None:
-                negative_prompt = "Static, 2D cartoon, cartoon, 2d animation, paintings, images, worst quality, low quality, ugly, deformed, walking backwards"
+                negative_prompt = ""
 
             if isinstance(negative_prompt, str):
                 negative_prompt = [negative_prompt] * len(prompt) if prompt is not None else [negative_prompt]
@@ -788,6 +691,8 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                 negative_prompt_embeds_qwen, negative_prompt_embeds_clip, negative_prompt_cu_seqlens = (
                     self.encode_prompt(
                         prompt=negative_prompt,
+                        image=image,
+                        num_images_per_prompt=num_images_per_prompt,
                         max_sequence_length=max_sequence_length,
                         dtype=dtype,
                     )
@@ -797,23 +702,22 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         self.scheduler.set_timesteps(num_inference_steps)
         timesteps = self.scheduler.timesteps
 
-        # 5. Prepare latent variables
+        # 5. Prepare latent variables with image conditioning
         num_channels_latents = self.transformer.config.in_visual_dim
         latents = self.prepare_latents(
-            batch_size * num_videos_per_prompt,
-            num_channels_latents,
-            height,
-            width,
-            num_frames,
-            dtype,
-            generator,
-            latents,
+            image=image,
+            batch_size=batch_size * num_images_per_prompt,
+            num_channels_latents=num_channels_latents,
+            height=height,
+            width=width,
+            dtype=dtype,
+            generator=generator,
+            latents=latents,
         )
 
         # 6. Prepare rope positions for positional encoding
-        num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
         visual_rope_pos = [
-            mint.arange(num_latent_frames),
+            mint.arange(1),
             mint.arange(height // self.vae_scale_factor_spatial // 2),
             mint.arange(width // self.vae_scale_factor_spatial // 2),
         ]
@@ -827,10 +731,10 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         )
 
         # 7. Calculate dynamic scale factor based on resolution
-        scale_factor = self._get_scale_factor(height, width)
+        scale_factor = [1.0, 1.0, 1.0]
 
         # 8. Sparse Params for efficient attention
-        sparse_params = self.get_sparse_params(latents)
+        sparse_params = None
 
         # 9. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -841,7 +745,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                 if self.interrupt:
                     continue
 
-                timestep = t.unsqueeze(0).repeat(batch_size * num_videos_per_prompt)
+                timestep = t.unsqueeze(0).repeat(batch_size * num_images_per_prompt)
 
                 # Predict noise residual
                 pred_velocity = self.transformer(
@@ -849,7 +753,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                     encoder_hidden_states=prompt_embeds_qwen.to(dtype),
                     pooled_projections=prompt_embeds_clip.to(dtype),
                     timestep=timestep.to(dtype),
-                    visual_rope_pos=ms.mutable(visual_rope_pos),
+                    visual_rope_pos=visual_rope_pos,
                     text_rope_pos=text_rope_pos,
                     scale_factor=scale_factor,
                     sparse_params=sparse_params,
@@ -862,7 +766,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                         encoder_hidden_states=negative_prompt_embeds_qwen.to(dtype),
                         pooled_projections=negative_prompt_embeds_clip.to(dtype),
                         timestep=timestep.to(dtype),
-                        visual_rope_pos=ms.mutable(visual_rope_pos),
+                        visual_rope_pos=visual_rope_pos,
                         text_rope_pos=negative_text_rope_pos,
                         scale_factor=scale_factor,
                         sparse_params=sparse_params,
@@ -870,9 +774,9 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                     )[0]
 
                     pred_velocity = uncond_pred_velocity + guidance_scale * (pred_velocity - uncond_pred_velocity)
-                # Compute previous sample using the scheduler
+
                 latents[:, :, :, :, :num_channels_latents] = self.scheduler.step(
-                    pred_velocity, t, latents[:, :, :, :, :num_channels_latents], return_dict=False
+                    pred_velocity[:, :], t, latents[:, :, :, :, :num_channels_latents], return_dict=False
                 )[0]
 
                 if callback_on_step_end is not None:
@@ -894,38 +798,43 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
 
-        # 10. Post-processing - extract main latents
+                if XLA_AVAILABLE:
+                    xm.mark_step()
+
+        # 9. Post-processing - extract main latents
         latents = latents[:, :, :, :, :num_channels_latents]
 
-        # 11. Decode latents to video
+        # 10. Decode latents to image
         if output_type != "latent":
             latents = latents.to(self.vae.dtype)
             # Reshape and normalize latents
-            video = latents.reshape(
+            latents = latents.reshape(
                 batch_size,
-                num_videos_per_prompt,
-                (num_frames - 1) // self.vae_scale_factor_temporal + 1,
+                num_images_per_prompt,
+                1,
                 height // self.vae_scale_factor_spatial,
                 width // self.vae_scale_factor_spatial,
                 num_channels_latents,
             )
-            video = video.permute(0, 1, 5, 2, 3, 4)  # [batch, num_videos, channels, frames, height, width]
-            video = video.reshape(
-                batch_size * num_videos_per_prompt,
+            latents = latents.permute(0, 1, 5, 2, 3, 4)  # [batch, num_images, channels, 1, height, width]
+            latents = latents.reshape(
+                batch_size * num_images_per_prompt,
                 num_channels_latents,
-                (num_frames - 1) // self.vae_scale_factor_temporal + 1,
                 height // self.vae_scale_factor_spatial,
                 width // self.vae_scale_factor_spatial,
             )
 
             # Normalize and decode through VAE
-            video = video / self.vae.config.scaling_factor
-            video = self.vae.decode(video)[0]
-            video = self.video_processor.postprocess_video(video, output_type=output_type)
+            latents = latents / self.vae.config.scaling_factor
+            image = self.vae.decode(latents).sample
+            image = self.image_processor.postprocess(image, output_type=output_type)
         else:
-            video = latents
+            image = latents
+
+        # Offload all models
+        self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (video,)
+            return (image,)
 
-        return KandinskyPipelineOutput(frames=video)
+        return KandinskyImagePipelineOutput(image=image)

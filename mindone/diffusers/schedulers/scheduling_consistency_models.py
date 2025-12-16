@@ -124,7 +124,7 @@ class CMStochasticIterativeScheduler(SchedulerMixin, ConfigMixin):
         Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
 
         Args:
-            begin_index (`int`):
+            begin_index (`int`, defaults to `0`):
                 The begin index for the scheduler.
         """
         self._begin_index = begin_index
@@ -263,11 +263,7 @@ class CMStochasticIterativeScheduler(SchedulerMixin, ConfigMixin):
         Gets the scalings used in the consistency model parameterization (from Appendix C of the
         [paper](https://huggingface.co/papers/2303.01469)) to enforce boundary condition.
 
-        <Tip>
-
-        `epsilon` in the equations for `c_skip` and `c_out` is set to `sigma_min`.
-
-        </Tip>
+        > [!TIP] > `epsilon` in the equations for `c_skip` and `c_out` is set to `sigma_min`.
 
         Args:
             sigma (`ms.Tensor`):
@@ -286,7 +282,23 @@ class CMStochasticIterativeScheduler(SchedulerMixin, ConfigMixin):
         return c_skip, c_out
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler.index_for_timestep
-    def index_for_timestep(self, timestep, schedule_timesteps=None):
+    def index_for_timestep(
+        self, timestep: Union[float, ms.Tensor], schedule_timesteps: Optional[ms.Tensor] = None
+    ) -> int:
+        """
+        Find the index of a given timestep in the timestep schedule.
+
+        Args:
+            timestep (`float` or `ms.Tensor`):
+                The timestep value to find in the schedule.
+            schedule_timesteps (`ms.Tensor`, *optional*):
+                The timestep schedule to search in. If `None`, uses `self.timesteps`.
+
+        Returns:
+            `int`:
+                The index of the timestep in the schedule. For the very first step, returns the second index if
+                multiple matches exist to avoid skipping a sigma when starting mid-schedule (e.g., for image-to-image).
+        """
         if schedule_timesteps is None:
             schedule_timesteps = self.timesteps
 
@@ -304,7 +316,14 @@ class CMStochasticIterativeScheduler(SchedulerMixin, ConfigMixin):
         return int(indices[pos])
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._init_step_index
-    def _init_step_index(self, timestep):
+    def _init_step_index(self, timestep: Union[float, ms.Tensor]) -> None:
+        """
+        Initialize the step index for the scheduler based on the given timestep.
+
+        Args:
+            timestep (`float` or `ms.Tensor`):
+                The current timestep to initialize the step index from.
+        """
         if self.begin_index is None:
             self._step_index = self.index_for_timestep(timestep)
         else:
@@ -408,6 +427,21 @@ class CMStochasticIterativeScheduler(SchedulerMixin, ConfigMixin):
         noise: ms.Tensor,
         timesteps: ms.Tensor,
     ) -> ms.Tensor:
+        """
+        Add noise to the original samples according to the noise schedule at the specified timesteps.
+
+        Args:
+            original_samples (`ms.Tensor`):
+                The original samples to which noise will be added.
+            noise (`ms.Tensor`):
+                The noise tensor to add to the original samples.
+            timesteps (`ms.Tensor`):
+                The timesteps at which to add noise, determining the noise level from the schedule.
+
+        Returns:
+            `ms.Tensor`:
+                The noisy samples with added noise scaled according to the timestep schedule.
+        """
         broadcast_shape = original_samples.shape
         # Make sure sigmas and timesteps have the same device and dtype as original_samples
         sigmas = self.sigmas.to(dtype=original_samples.dtype)

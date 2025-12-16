@@ -13,12 +13,13 @@
 # limitations under the License.
 
 import inspect
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
 import mindspore as ms
 
+from ...models import WanTransformer3DModel
 from ...schedulers import UniPCMultistepScheduler
 from ...utils import logging
 from ...utils.mindspore_utils import randn_tensor
@@ -33,6 +34,97 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 # things like when to do guidance and how many conditions to be prepared can be determined. Currently, this is done by
 # always assuming you want to do guidance in the Guiders. So, negative embeddings are prepared regardless of what the
 # configuration of guider is.
+
+
+def repeat_tensor_to_batch_size(
+    input_name: str,
+    input_tensor: ms.Tensor,
+    batch_size: int,
+    num_videos_per_prompt: int = 1,
+) -> ms.Tensor:
+    """Repeat tensor elements to match the final batch size.
+
+    This function expands a tensor's batch dimension to match the final batch size (batch_size * num_videos_per_prompt)
+    by repeating each element along dimension 0.
+
+    The input tensor must have batch size 1 or batch_size. The function will:
+    - If batch size is 1: repeat each element (batch_size * num_videos_per_prompt) times
+    - If batch size equals batch_size: repeat each element num_videos_per_prompt times
+
+    Args:
+        input_name (str): Name of the input tensor (used for error messages)
+        input_tensor (ms.Tensor): The tensor to repeat. Must have batch size 1 or batch_size.
+        batch_size (int): The base batch size (number of prompts)
+        num_videos_per_prompt (int, optional): Number of videos to generate per prompt. Defaults to 1.
+
+    Returns:
+        ms.Tensor: The repeated tensor with final batch size (batch_size * num_videos_per_prompt)
+
+    Raises:
+        ValueError: If input_tensor is not a ms.Tensor or has invalid batch size
+
+    Examples:
+        tensor = ms.tensor([[1, 2, 3]]) # shape: [1, 3] repeated = repeat_tensor_to_batch_size("image", tensor,
+        batch_size=2, num_videos_per_prompt=2) repeated # tensor([[1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3]]) - shape:
+        [4, 3]
+
+        tensor = ms.tensor([[1, 2, 3], [4, 5, 6]]) # shape: [2, 3] repeated = repeat_tensor_to_batch_size("image",
+        tensor, batch_size=2, num_videos_per_prompt=2) repeated # tensor([[1, 2, 3], [1, 2, 3], [4, 5, 6], [4, 5, 6]])
+        - shape: [4, 3]
+    """
+    # make sure input is a tensor
+    if not isinstance(input_tensor, ms.Tensor):
+        raise ValueError(f"`{input_name}` must be a tensor")
+
+    # make sure input tensor e.g. image_latents has batch size 1 or batch_size same as prompts
+    if input_tensor.shape[0] == 1:
+        repeat_by = batch_size * num_videos_per_prompt
+    elif input_tensor.shape[0] == batch_size:
+        repeat_by = num_videos_per_prompt
+    else:
+        raise ValueError(
+            f"`{input_name}` must have have batch size 1 or {batch_size}, but got {input_tensor.shape[0]}"
+        )
+
+    # expand the tensor to match the batch_size * num_videos_per_prompt
+    input_tensor = input_tensor.repeat_interleave(repeat_by, dim=0)
+
+    return input_tensor
+
+
+def calculate_dimension_from_latents(
+    latents: ms.Tensor, vae_scale_factor_temporal: int, vae_scale_factor_spatial: int
+) -> Tuple[int, int]:
+    """Calculate image dimensions from latent tensor dimensions.
+
+    This function converts latent temporal and spatial dimensions to image temporal and spatial dimensions by
+    multiplying the latent num_frames/height/width by the VAE scale factor.
+
+    Args:
+        latents (ms.Tensor): The latent tensor. Must have 4 or 5 dimensions.
+            Expected shapes: [batch, channels, height, width] or [batch, channels, frames, height, width]
+        vae_scale_factor_temporal (int): The scale factor used by the VAE to compress temporal dimension.
+            Typically 4 for most VAEs (video is 4x larger than latents in temporal dimension)
+        vae_scale_factor_spatial (int): The scale factor used by the VAE to compress spatial dimension.
+            Typically 8 for most VAEs (image is 8x larger than latents in each dimension)
+
+    Returns:
+        Tuple[int, int]: The calculated image dimensions as (height, width)
+
+    Raises:
+        ValueError: If latents tensor doesn't have 4 or 5 dimensions
+
+    """
+    if latents.ndim != 5:
+        raise ValueError(f"latents must have 5 dimensions, but got {latents.ndim}")
+
+    _, _, num_latent_frames, latent_height, latent_width = latents.shape
+
+    num_frames = (num_latent_frames - 1) * vae_scale_factor_temporal + 1
+    height = latent_height * vae_scale_factor_spatial
+    width = latent_width * vae_scale_factor_spatial
+
+    return num_frames, height, width
 
 
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
@@ -92,7 +184,7 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-class WanInputStep(ModularPipelineBlocks):
+class WanTextInputStep(ModularPipelineBlocks):
     model_name = "wan"
 
     @property
@@ -107,14 +199,15 @@ class WanInputStep(ModularPipelineBlocks):
         )
 
     @property
-    def inputs(self) -> List[InputParam]:
+    def expected_components(self) -> List[ComponentSpec]:
         return [
-            InputParam("num_videos_per_prompt", default=1),
+            ComponentSpec("transformer", WanTransformer3DModel),
         ]
 
     @property
-    def intermediate_inputs(self) -> List[str]:
+    def inputs(self) -> List[InputParam]:
         return [
+            InputParam("num_videos_per_prompt", default=1),
             InputParam(
                 "prompt_embeds",
                 required=True,
@@ -139,19 +232,7 @@ class WanInputStep(ModularPipelineBlocks):
             OutputParam(
                 "dtype",
                 type_hint=ms.Type,
-                description="Data type of model tensor inputs (determined by `prompt_embeds`)",
-            ),
-            OutputParam(
-                "prompt_embeds",
-                type_hint=ms.Tensor,
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
-                description="text embeddings used to guide the image generation",
-            ),
-            OutputParam(
-                "negative_prompt_embeds",
-                type_hint=ms.Tensor,
-                kwargs_type="denoiser_input_fields",  # already in intermedites state but declare here again for guider_input_fields
-                description="negative text embeddings used to guide the image generation",
+                description="Data type of model tensor inputs (determined by `transformer.dtype`)",
             ),
         ]
 
@@ -164,6 +245,7 @@ class WanInputStep(ModularPipelineBlocks):
                     f" {block_state.negative_prompt_embeds.shape}."
                 )
 
+    @ms._no_grad()
     def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
         block_state = self.get_block_state(state)
         self.check_inputs(components, block_state)
@@ -191,6 +273,140 @@ class WanInputStep(ModularPipelineBlocks):
         return components, state
 
 
+class WanAdditionalInputsStep(ModularPipelineBlocks):
+    model_name = "wan"
+
+    def __init__(
+        self,
+        image_latent_inputs: List[str] = ["first_frame_latents"],
+        additional_batch_inputs: List[str] = [],
+    ):
+        """Initialize a configurable step that standardizes the inputs for the denoising step. It:\n"
+
+        This step handles multiple common tasks to prepare inputs for the denoising step:
+        1. For encoded image latents, use it update height/width if None, and expands batch size
+        2. For additional_batch_inputs: Only expands batch dimensions to match final batch size
+
+        This is a dynamic block that allows you to configure which inputs to process.
+
+        Args:
+            image_latent_inputs (List[str], optional): Names of image latent tensors to process.
+                In additional to adjust batch size of these inputs, they will be used to determine height/width. Can be
+                a single string or list of strings. Defaults to ["first_frame_latents"].
+            additional_batch_inputs (List[str], optional):
+                Names of additional conditional input tensors to expand batch size. These tensors will only have their
+                batch dimensions adjusted to match the final batch size. Can be a single string or list of strings.
+                Defaults to [].
+
+        Examples:
+            # Configure to process first_frame_latents (default behavior) WanAdditionalInputsStep()
+
+            # Configure to process multiple image latent inputs
+            WanAdditionalInputsStep(image_latent_inputs=["first_frame_latents", "last_frame_latents"])
+
+            # Configure to process image latents and additional batch inputs WanAdditionalInputsStep(
+                image_latent_inputs=["first_frame_latents"], additional_batch_inputs=["image_embeds"]
+            )
+        """
+        if not isinstance(image_latent_inputs, list):
+            image_latent_inputs = [image_latent_inputs]
+        if not isinstance(additional_batch_inputs, list):
+            additional_batch_inputs = [additional_batch_inputs]
+
+        self._image_latent_inputs = image_latent_inputs
+        self._additional_batch_inputs = additional_batch_inputs
+        super().__init__()
+
+    @property
+    def description(self) -> str:
+        # Functionality section
+        summary_section = (
+            "Input processing step that:\n"
+            "  1. For image latent inputs: Updates height/width if None, and expands batch size\n"
+            "  2. For additional batch inputs: Expands batch dimensions to match final batch size"
+        )
+
+        # Inputs info
+        inputs_info = ""
+        if self._image_latent_inputs or self._additional_batch_inputs:
+            inputs_info = "\n\nConfigured inputs:"
+            if self._image_latent_inputs:
+                inputs_info += f"\n  - Image latent inputs: {self._image_latent_inputs}"
+            if self._additional_batch_inputs:
+                inputs_info += f"\n  - Additional batch inputs: {self._additional_batch_inputs}"
+
+        # Placement guidance
+        placement_section = "\n\nThis block should be placed after the encoder steps and the text input step."
+
+        return summary_section + inputs_info + placement_section
+
+    @property
+    def inputs(self) -> List[InputParam]:
+        inputs = [
+            InputParam(name="num_videos_per_prompt", default=1),
+            InputParam(name="batch_size", required=True),
+            InputParam(name="height"),
+            InputParam(name="width"),
+            InputParam(name="num_frames"),
+        ]
+
+        # Add image latent inputs
+        for image_latent_input_name in self._image_latent_inputs:
+            inputs.append(InputParam(name=image_latent_input_name))
+
+        # Add additional batch inputs
+        for input_name in self._additional_batch_inputs:
+            inputs.append(InputParam(name=input_name))
+
+        return inputs
+
+    def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
+        block_state = self.get_block_state(state)
+
+        # Process image latent inputs (height/width calculation, patchify, and batch expansion)
+        for image_latent_input_name in self._image_latent_inputs:
+            image_latent_tensor = getattr(block_state, image_latent_input_name)
+            if image_latent_tensor is None:
+                continue
+
+            # 1. Calculate num_frames, height/width from latents
+            num_frames, height, width = calculate_dimension_from_latents(
+                image_latent_tensor, components.vae_scale_factor_temporal, components.vae_scale_factor_spatial
+            )
+            block_state.num_frames = block_state.num_frames or num_frames
+            block_state.height = block_state.height or height
+            block_state.width = block_state.width or width
+
+            # 3. Expand batch size
+            image_latent_tensor = repeat_tensor_to_batch_size(
+                input_name=image_latent_input_name,
+                input_tensor=image_latent_tensor,
+                num_videos_per_prompt=block_state.num_videos_per_prompt,
+                batch_size=block_state.batch_size,
+            )
+
+            setattr(block_state, image_latent_input_name, image_latent_tensor)
+
+        # Process additional batch inputs (only batch expansion)
+        for input_name in self._additional_batch_inputs:
+            input_tensor = getattr(block_state, input_name)
+            if input_tensor is None:
+                continue
+
+            # Only expand batch size
+            input_tensor = repeat_tensor_to_batch_size(
+                input_name=input_name,
+                input_tensor=input_tensor,
+                num_videos_per_prompt=block_state.num_videos_per_prompt,
+                batch_size=block_state.batch_size,
+            )
+
+            setattr(block_state, input_name, input_tensor)
+
+        self.set_block_state(state, block_state)
+        return components, state
+
+
 class WanSetTimestepsStep(ModularPipelineBlocks):
     model_name = "wan"
 
@@ -212,17 +428,7 @@ class WanSetTimestepsStep(ModularPipelineBlocks):
             InputParam("sigmas"),
         ]
 
-    @property
-    def intermediate_outputs(self) -> List[OutputParam]:
-        return [
-            OutputParam("timesteps", type_hint=ms.Tensor, description="The timesteps to use for inference"),
-            OutputParam(
-                "num_inference_steps",
-                type_hint=int,
-                description="The number of denoising steps to perform at inference time",
-            ),
-        ]
-
+    @ms._no_grad()
     def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
         block_state = self.get_block_state(state)
 
@@ -241,10 +447,6 @@ class WanPrepareLatentsStep(ModularPipelineBlocks):
     model_name = "wan"
 
     @property
-    def expected_components(self) -> List[ComponentSpec]:
-        return []
-
-    @property
     def description(self) -> str:
         return "Prepare latents step that prepares the latents for the text-to-video generation process"
 
@@ -256,11 +458,6 @@ class WanPrepareLatentsStep(ModularPipelineBlocks):
             InputParam("num_frames", type_hint=int),
             InputParam("latents", type_hint=Optional[ms.Tensor]),
             InputParam("num_videos_per_prompt", type_hint=int, default=1),
-        ]
-
-    @property
-    def intermediate_inputs(self) -> List[InputParam]:
-        return [
             InputParam("generator"),
             InputParam(
                 "batch_size",
@@ -327,29 +524,105 @@ class WanPrepareLatentsStep(ModularPipelineBlocks):
         latents = randn_tensor(shape, generator=generator, dtype=dtype)
         return latents
 
+    @ms._no_grad()
     def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
         block_state = self.get_block_state(state)
+        self.check_inputs(components, block_state)
+
+        dtype = ms.float32  # Wan latents should be ms.float32 for best quality
 
         block_state.height = block_state.height or components.default_height
         block_state.width = block_state.width or components.default_width
         block_state.num_frames = block_state.num_frames or components.default_num_frames
-        block_state.dtype = ms.float32  # Wan latents should be ms.float32 for best quality
-        block_state.num_channels_latents = components.num_channels_latents
-
-        self.check_inputs(components, block_state)
 
         block_state.latents = self.prepare_latents(
             components,
-            block_state.batch_size * block_state.num_videos_per_prompt,
-            block_state.num_channels_latents,
-            block_state.height,
-            block_state.width,
-            block_state.num_frames,
-            block_state.dtype,
-            block_state.generator,
-            block_state.latents,
+            batch_size=block_state.batch_size * block_state.num_videos_per_prompt,
+            num_channels_latents=components.num_channels_latents,
+            height=block_state.height,
+            width=block_state.width,
+            num_frames=block_state.num_frames,
+            dtype=dtype,
+            generator=block_state.generator,
+            latents=block_state.latents,
         )
 
         self.set_block_state(state, block_state)
 
+        return components, state
+
+
+class WanPrepareFirstFrameLatentsStep(ModularPipelineBlocks):
+    model_name = "wan"
+
+    @property
+    def description(self) -> str:
+        return "step that prepares the masked first frame latents and add it to the latent condition"
+
+    @property
+    def inputs(self) -> List[InputParam]:
+        return [
+            InputParam("first_frame_latents", type_hint=Optional[ms.Tensor]),
+            InputParam("num_frames", type_hint=int),
+        ]
+
+    def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
+        block_state = self.get_block_state(state)
+
+        batch_size, _, _, latent_height, latent_width = block_state.first_frame_latents.shape
+
+        mask_lat_size = mint.ones((batch_size, 1, block_state.num_frames, latent_height, latent_width))
+        mask_lat_size[:, :, list(range(1, block_state.num_frames))] = 0
+
+        first_frame_mask = mask_lat_size[:, :, 0:1]
+        first_frame_mask = mint.repeat_interleave(
+            first_frame_mask, dim=2, repeats=components.vae_scale_factor_temporal
+        )
+        mask_lat_size = mint.concat([first_frame_mask, mask_lat_size[:, :, 1:, :]], dim=2)
+        mask_lat_size = mask_lat_size.view(
+            batch_size, -1, components.vae_scale_factor_temporal, latent_height, latent_width
+        )
+        mask_lat_size = mask_lat_size.transpose(1, 2)
+        block_state.first_frame_latents = mint.concat([mask_lat_size, block_state.first_frame_latents], dim=1)
+
+        self.set_block_state(state, block_state)
+        return components, state
+
+
+class WanPrepareFirstLastFrameLatentsStep(ModularPipelineBlocks):
+    model_name = "wan"
+
+    @property
+    def description(self) -> str:
+        return "step that prepares the masked latents with first and last frames and add it to the latent condition"
+
+    @property
+    def inputs(self) -> List[InputParam]:
+        return [
+            InputParam("first_last_frame_latents", type_hint=Optional[ms.Tensor]),
+            InputParam("num_frames", type_hint=int),
+        ]
+
+    def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
+        block_state = self.get_block_state(state)
+
+        batch_size, _, _, latent_height, latent_width = block_state.first_last_frame_latents.shape
+
+        mask_lat_size = mint.ones((batch_size, 1, block_state.num_frames, latent_height, latent_width))
+        mask_lat_size[:, :, list(range(1, block_state.num_frames - 1))] = 0
+
+        first_frame_mask = mask_lat_size[:, :, 0:1]
+        first_frame_mask = mint.repeat_interleave(
+            first_frame_mask, dim=2, repeats=components.vae_scale_factor_temporal
+        )
+        mask_lat_size = mint.concat([first_frame_mask, mask_lat_size[:, :, 1:, :]], dim=2)
+        mask_lat_size = mask_lat_size.view(
+            batch_size, -1, components.vae_scale_factor_temporal, latent_height, latent_width
+        )
+        mask_lat_size = mask_lat_size.transpose(1, 2)
+        block_state.first_last_frame_latents = mint.concat(
+            [mask_lat_size, block_state.first_last_frame_latents], dim=1
+        )
+
+        self.set_block_state(state, block_state)
         return components, state

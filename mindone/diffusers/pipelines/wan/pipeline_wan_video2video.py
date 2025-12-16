@@ -49,7 +49,7 @@ EXAMPLE_DOC_STRING = """
     Examples:
         ```python
         >>> import mindspore as ms
-        >>> from mindone.diffusers.utils import export_to_video
+        >>> from mindone.diffusers.utils import export_to_video, load_video
         >>> from mindone.diffusers import AutoencoderKLWan, WanVideoToVideoPipeline
         >>> from mindone.diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
 

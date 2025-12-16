@@ -28,13 +28,26 @@ _import_structure["modular_pipeline_utils"] = [
     "InsertableDict",
 ]
 _import_structure["stable_diffusion_xl"] = ["StableDiffusionXLAutoBlocks", "StableDiffusionXLModularPipeline"]
-_import_structure["wan"] = ["WanAutoBlocks", "WanModularPipeline"]
-_import_structure["flux"] = ["FluxAutoBlocks", "FluxModularPipeline"]
+_import_structure["wan"] = ["WanAutoBlocks", "Wan22AutoBlocks", "WanModularPipeline"]
+_import_structure["flux"] = [
+    "FluxAutoBlocks",
+    "FluxModularPipeline",
+    "FluxKontextAutoBlocks",
+    "FluxKontextModularPipeline",
+]
+# _import_structure["qwenimage"] = [
+#     "QwenImageAutoBlocks",
+#     "QwenImageModularPipeline",
+#     "QwenImageEditModularPipeline",
+#     "QwenImageEditAutoBlocks",
+#     "QwenImageEditPlusModularPipeline",
+#     "QwenImageEditPlusAutoBlocks",
+# ]
 _import_structure["components_manager"] = ["ComponentsManager"]
 
 if TYPE_CHECKING:
     from .components_manager import ComponentsManager
-    from .flux import FluxAutoBlocks, FluxModularPipeline
+    from .flux import FluxAutoBlocks, FluxKontextAutoBlocks, FluxKontextModularPipeline, FluxModularPipeline
     from .modular_pipeline import (
         AutoPipelineBlocks,
         BlockState,
@@ -45,8 +58,16 @@ if TYPE_CHECKING:
         SequentialPipelineBlocks,
     )
     from .modular_pipeline_utils import ComponentSpec, ConfigSpec, InputParam, InsertableDict, OutputParam
+    # from .qwenimage import (
+    #     QwenImageAutoBlocks,
+    #     QwenImageEditAutoBlocks,
+    #     QwenImageEditModularPipeline,
+    #     QwenImageEditPlusAutoBlocks,
+    #     QwenImageEditPlusModularPipeline,
+    #     QwenImageModularPipeline,
+    # )
     from .stable_diffusion_xl import StableDiffusionXLAutoBlocks, StableDiffusionXLModularPipeline
-    from .wan import WanAutoBlocks, WanModularPipeline
+    from .wan import Wan22AutoBlocks, WanAutoBlocks, WanModularPipeline
 else:
     import sys
 

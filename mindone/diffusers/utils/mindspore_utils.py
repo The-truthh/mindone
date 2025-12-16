@@ -165,3 +165,15 @@ class pynative_context(contextlib.ContextDecorator):
 def unwrap_module(module):
     """FIXME: Unwraps a module if it was compiled with ms.jit() ???"""
     return module
+
+
+def enable_full_determinism():
+    """
+    Helper function for reproducible behavior during distributed training. See
+    - https://pytorch.org/docs/stable/notes/randomness.html for pytorch
+    """
+    ms.set_deterministic(True)
+
+
+def disable_full_determinism():
+    ms.set_deterministic(False)

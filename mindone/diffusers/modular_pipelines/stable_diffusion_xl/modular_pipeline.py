@@ -47,11 +47,7 @@ class StableDiffusionXLModularPipeline(
     """
     A ModularPipeline for Stable Diffusion XL.
 
-    <Tip warning={true}>
-
-        This is an experimental feature and is likely to change in the future.
-
-    </Tip>
+    > [!WARNING] > This is an experimental feature and is likely to change in the future.
     """
 
     default_blocks_name = "StableDiffusionXLAutoBlocks"
@@ -78,6 +74,7 @@ class StableDiffusionXLModularPipeline(
             vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         return vae_scale_factor
 
+    # YiYi TODO: change to num_channels_latents
     @property
     def num_channels_unet(self):
         num_channels_unet = 4

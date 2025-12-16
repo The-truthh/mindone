@@ -25,10 +25,10 @@ from transformers import RobertaTokenizer, RobertaTokenizerFast, T5Tokenizer, T5
 import mindspore
 from mindspore import mint
 
-from ....transformers import ClapFeatureExtractor, ClapModel, GPT2Model, SpeechT5HifiGan, T5EncoderModel, VitsModel
+from ....transformers import ClapFeatureExtractor, ClapModel, GPT2LMHeadModel, SpeechT5HifiGan, T5EncoderModel, VitsModel
 from ...models import AutoencoderKL
 from ...schedulers import KarrasDiffusionSchedulers
-from ...utils import logging
+from ...utils import deprecate, logging
 from ...utils.mindspore_utils import randn_tensor
 from ..pipeline_utils import AudioPipelineOutput, DiffusionPipeline
 from .modeling_audioldm2 import AudioLDM2ProjectionModel, AudioLDM2UNet2DConditionModel
@@ -168,7 +168,7 @@ class AudioLDM2Pipeline(DiffusionPipeline):
         text_encoder: ClapModel,
         text_encoder_2: Union[T5EncoderModel, VitsModel],
         projection_model: AudioLDM2ProjectionModel,
-        language_model: GPT2Model,
+        language_model: GPT2LMHeadModel,
         tokenizer: Union[RobertaTokenizer, RobertaTokenizerFast],
         tokenizer_2: Union[T5Tokenizer, T5TokenizerFast, VitsTokenizer],
         feature_extractor: ClapFeatureExtractor,
@@ -199,6 +199,12 @@ class AudioLDM2Pipeline(DiffusionPipeline):
         Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
         compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
         """
+        depr_message = f"Calling `enable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.enable_slicing()`."
+        deprecate(
+            "enable_vae_slicing",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.enable_slicing()
 
     # Copied from diffusers.pipelines.pipeline_utils.StableDiffusionMixin.disable_vae_slicing
@@ -207,6 +213,12 @@ class AudioLDM2Pipeline(DiffusionPipeline):
         Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
         computing decoding in one step.
         """
+        depr_message = f"Calling `disable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.disable_slicing()`."
+        deprecate(
+            "disable_vae_slicing",
+            "0.40.0",
+            depr_message,
+        )
         self.vae.disable_slicing()
 
     def enable_model_cpu_offload(self):
