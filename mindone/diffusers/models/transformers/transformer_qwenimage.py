@@ -21,6 +21,7 @@ import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
 import mindspore as ms
 from mindspore import mint, nn, ops
 

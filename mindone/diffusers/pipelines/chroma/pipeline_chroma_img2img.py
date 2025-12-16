@@ -30,7 +30,7 @@ from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import FluxIPAdapterMixin, FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin
 from ...models import AutoencoderKL, ChromaTransformer2DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
-from ...utils import logging, deprecate, scale_lora_layers, unscale_lora_layers
+from ...utils import deprecate, logging, scale_lora_layers, unscale_lora_layers
 from ...utils.mindspore_utils import pynative_context, randn_tensor
 from ..pipeline_utils import DiffusionPipeline
 from .pipeline_output import ChromaPipelineOutput
@@ -236,7 +236,6 @@ class ChromaImg2ImgPipeline(
         )
         text_input_ids = ms.tensor(text_inputs.input_ids)
         tokenizer_mask = ms.tensor(text_inputs.attention_mask)
-
 
         with pynative_context():
             prompt_embeds = self.text_encoder(
@@ -537,7 +536,7 @@ class ChromaImg2ImgPipeline(
         depr_message = f"Calling `disable_vae_slicing()` on a `{self.__class__.__name__}` is deprecated and this method will be removed in a future version. Please use `pipe.vae.disable_slicing()`."
         deprecate(
             "disable_vae_slicing",
-            "0.40.0", 
+            "0.40.0",
             depr_message,
         )
         self.vae.disable_slicing()

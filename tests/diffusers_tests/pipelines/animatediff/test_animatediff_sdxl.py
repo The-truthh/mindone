@@ -185,6 +185,9 @@ class AnimateDiffPipelineSDXLFastTests(PipelineTesterMixin, unittest.TestCase):
     @data(*test_cases)
     @unpack
     def test_inference(self, mode, dtype):
+        if dtype == "float16":
+            pytest.skip("AnimateDiffSDXLPipeline does not support float16 on CPU in PyTorch")
+
         ms.set_context(mode=mode)
 
         pt_components, ms_components = self.get_dummy_components()

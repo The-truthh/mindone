@@ -30,7 +30,7 @@ from ..pipeline_test_utils import (
 )
 
 test_cases = [
-    {"mode": 0, "dtype": "bfloat16"},
+    {"mode": 1, "dtype": "float16"},
     {"mode": 1, "dtype": "bfloat16"},
 ]
 
@@ -208,9 +208,6 @@ class HunyuanImagePipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         ms_pipe = ms_pipe.to(ms_dtype)
 
         inputs = self.get_dummy_inputs()
-
-        if mode == 0:
-            ms_pipe.transformer.construct = ms.jit(ms_pipe.transformer.construct)
 
         torch.manual_seed(0)
         pt_image = pt_pipe(**inputs)

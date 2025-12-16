@@ -45,7 +45,7 @@ EXAMPLE_DOC_STRING = """
         >>> import numpy as np
 
         >>> repo_id = "stabilityai/stable-audio-open-1.0"
-        >>> pipe = StableAudioPipeline.from_pretrained(repo_id, mindspore_dtype=torch.float32)
+        >>> pipe = StableAudioPipeline.from_pretrained(repo_id, mindspore_dtype=ms.float32)
 
         >>> # define the prompts
         >>> prompt = "The sound of a hammer hitting a wooden surface."

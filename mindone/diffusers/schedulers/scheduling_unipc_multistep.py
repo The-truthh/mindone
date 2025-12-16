@@ -307,9 +307,7 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         """
         self._begin_index = begin_index
 
-    def set_timesteps(
-        self, num_inference_steps: int, mu: Optional[float] = None
-    ) -> None:
+    def set_timesteps(self, num_inference_steps: int, mu: Optional[float] = None) -> None:
         """
         Sets the discrete timesteps used for the diffusion chain (to be run before inference).
 

@@ -92,12 +92,11 @@ _import_structure = {
 
 if TYPE_CHECKING:
     from .ip_adapter import FluxIPAdapterMixin, IPAdapterMixin, ModularIPAdapterMixin, SD3IPAdapterMixin
-    from .lora_pipeline import (
+    from .lora_pipeline import (  # Flux2LoraLoaderMixin,; ZImageLoraLoaderMixin,
         AmusedLoraLoaderMixin,
         AuraFlowLoraLoaderMixin,
         CogVideoXLoraLoaderMixin,
         CogView4LoraLoaderMixin,
-        # Flux2LoraLoaderMixin,
         FluxLoraLoaderMixin,
         HiDreamImageLoraLoaderMixin,
         HunyuanVideoLoraLoaderMixin,
@@ -113,7 +112,6 @@ if TYPE_CHECKING:
         StableDiffusionLoraLoaderMixin,
         StableDiffusionXLLoraLoaderMixin,
         WanLoraLoaderMixin,
-        # ZImageLoraLoaderMixin,
     )
     from .peft import PeftAdapterMixin
     from .single_file import FromSingleFileMixin

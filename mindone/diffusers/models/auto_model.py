@@ -24,7 +24,6 @@ from ..configuration_utils import ConfigMixin
 from ..utils import logging
 from ..utils.dynamic_modules_utils import get_class_from_dynamic_module, resolve_trust_remote_code
 
-
 logger = logging.get_logger(__name__)
 
 

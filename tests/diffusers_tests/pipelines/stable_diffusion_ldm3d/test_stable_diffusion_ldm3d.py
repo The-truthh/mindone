@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 import torch
 from ddt import data, ddt, unpack
+from packaging.version import Version
 from transformers import CLIPTextConfig
 
 import mindspore as ms
@@ -144,6 +145,11 @@ class StableDiffusionLDM3DPipelineFastTests(PipelineTesterMixin, unittest.TestCa
     @data(*test_cases)
     @unpack
     def test_stable_diffusion_ddim(self, mode, dtype):
+        last_supported_version = Version("0.33.1")
+        current_version = Version(diffusers.__version__)
+        if current_version > last_supported_version:
+            pytest.skip(f"StableDiffusionLDM3DPipeline is not supported in diffusers version {current_version}")
+
         ms.set_context(mode=mode)
 
         pt_components, ms_components = self.get_dummy_components()
@@ -184,6 +190,11 @@ class StableDiffusionPipelineNightlyTests(PipelineTesterMixin, unittest.TestCase
     @data(*test_cases)
     @unpack
     def test_ldm3d(self, mode, dtype):
+        last_supported_version = Version("0.33.1")
+        current_version = Version(diffusers.__version__)
+        if current_version > last_supported_version:
+            pytest.skip(f"StableDiffusionLDM3DPipeline is not supported in diffusers version {current_version}")
+
         # TODO: this pipeline has precision issue in float16 and we need to fix it
         if dtype == "float16":
             pytest.skip("Skipping this case since this pipeline has precision issue in float16")

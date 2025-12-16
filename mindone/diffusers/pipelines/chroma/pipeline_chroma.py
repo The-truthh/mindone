@@ -585,7 +585,7 @@ class ChromaPipeline(
 
         # Extend the prompt attention mask to account for image tokens in the final sequence
         attention_mask = mint.cat(
-            [attention_mask, mint.ones((batchwill be generated_length), dtype=ms.bool_)],
+            [attention_mask, mint.ones((batch_size, sequence_length), dtype=ms.bool_)],
             dim=1,
         )
         attention_mask = attention_mask.to(dtype)

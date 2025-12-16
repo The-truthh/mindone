@@ -46,12 +46,14 @@ class DanceDiffusionPipeline(DeprecatedPipelineMixin, DiffusionPipeline):
             [`IPNDMScheduler`].
     """
 
+    _last_supported_version = "0.33.1"
     model_cpu_offload_seq = "unet"
 
     def __init__(self, unet: UNet1DModel, scheduler: SchedulerMixin):
         super().__init__()
         self.register_modules(unet=unet, scheduler=scheduler)
 
+    @ms._no_grad()
     def __call__(
         self,
         batch_size: int = 1,

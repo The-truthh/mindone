@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import mindspore as ms
 from mindspore import mint, nn, ops
@@ -862,9 +862,7 @@ class UNet2DConditionModel(
         if self.original_attn_processors is not None:
             self.set_attn_processor(self.original_attn_processors)
 
-    def get_time_embed(
-        self, sample: torch.Tensor, timestep: Union[torch.Tensor, float, int]
-    ) -> Optional[torch.Tensor]:
+    def get_time_embed(self, sample: ms.Tensor, timestep: Union[ms.Tensor, float, int]) -> Optional[ms.Tensor]:
         timesteps = timestep
         # todo: unavailable mint interface
         if not ops.is_tensor(timesteps):

@@ -4055,6 +4055,7 @@ def convert_z_image_transformer_checkpoint_to_diffusers(checkpoint, **kwargs):
 
     return converted_state_dict
 
+
 def _load_param_into_net(model, state_dict, mindspore_dtype=None):
     model_dtype = next(iter(model.get_parameters())).dtype
     state_dict_dtype = next(iter(state_dict.values())).dtype

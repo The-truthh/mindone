@@ -142,7 +142,7 @@ class PerturbedAttentionGuidance(BaseGuidance):
         for config in perturbed_guidance_config:
             if config.skip_attention or not config.skip_attention_scores or config.skip_ff:
                 logger.warning(
-                    "Perturbed Attention Guidance is designed to perturb attention scores, so `skip_attention` should be False, `skip_attention_scores` should be True, and `skip_ff` should be False. " # noqa
+                    "Perturbed Attention Guidance is designed to perturb attention scores, so `skip_attention` should be False, `skip_attention_scores` should be True, and `skip_ff` should be False. "  # noqa
                     "Please check your configuration. Modifying the config to match the expected values."
                 )
             config.skip_attention = False

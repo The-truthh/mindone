@@ -30,7 +30,7 @@ from ...image_processor import VaeImageProcessor
 from ...loaders import AuraFlowLoraLoaderMixin
 from ...models import AuraFlowTransformer2DModel, AutoencoderKL
 from ...schedulers import FlowMatchEulerDiscreteScheduler
-from ...utils import logging, deprecate, scale_lora_layers, unscale_lora_layers
+from ...utils import deprecate, logging, scale_lora_layers, unscale_lora_layers
 from ...utils.mindspore_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 

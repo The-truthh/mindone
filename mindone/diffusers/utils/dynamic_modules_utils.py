@@ -38,7 +38,6 @@ from .. import __version__
 from . import DIFFUSERS_DYNAMIC_MODULE_NAME, HF_MODULES_CACHE, logging
 from .constants import DIFFUSERS_DISABLE_REMOTE_CODE
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 # See https://huggingface.co/datasets/diffusers/community-pipelines-mirror

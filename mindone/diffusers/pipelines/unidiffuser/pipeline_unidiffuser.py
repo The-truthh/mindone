@@ -1152,7 +1152,7 @@ class UniDiffuserPipeline(DeprecatedPipelineMixin, DiffusionPipeline):
                 Corresponds to parameter eta (η) from the [DDIM](https://huggingface.co/papers/2010.02502) paper. Only
                 applies to the [`~schedulers.DDIMScheduler`], and is ignored in other schedulers.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                A [`np.random.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
+                A [`np.random.Generator`](https://numpy.org/doc/stable/reference/random/generator.html) to make
                 generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for joint

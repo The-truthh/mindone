@@ -717,7 +717,7 @@ class StableDiffusionXLPipeline(
             "1.0.0",
             "`upcast_vae` is deprecated. Please use `pipe.vae.to(ms.float32)`.",
         )
-        self.vae.to(dtype=torch.float32)
+        self.vae.to(dtype=ms.float32)
 
     # Copied from diffusers.pipelines.latent_consistency_models.pipeline_latent_consistency_text2img.LatentConsistencyModelPipeline.get_guidance_scale_embedding
     def get_guidance_scale_embedding(

@@ -17,7 +17,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import mindspore as ms
 from mindspore import mint, nn, ops
@@ -38,12 +38,7 @@ from ..attention_processor import (
 from ..embeddings import TimestepEmbedding, Timesteps
 from ..modeling_utils import ModelMixin
 from ..transformers.transformer_temporal import TransformerTemporalModel
-from .unet_3d_blocks import (
-    UNetMidBlock3DCrossAttn,
-    get_down_block,
-    get_up_block,
-)
-
+from .unet_3d_blocks import UNetMidBlock3DCrossAttn, get_down_block, get_up_block
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 

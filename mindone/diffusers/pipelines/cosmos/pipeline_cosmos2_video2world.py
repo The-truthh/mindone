@@ -481,9 +481,9 @@ class Cosmos2VideoToWorldPipeline(DiffusionPipeline):
         The call function to the pipeline for generation.
 
         Args:
-            image (`PIL.Image.Image`, `np.ndarray`, `torch.Tensor`, *optional*):
+            image (`PIL.Image.Image`, `np.ndarray`, `ms.Tensor`, *optional*):
                 The image to be used as a conditioning input for the video generation.
-            video (`List[PIL.Image.Image]`, `np.ndarray`, `torch.Tensor`, *optional*):
+            video (`List[PIL.Image.Image]`, `np.ndarray`, `ms.Tensor`, *optional*):
                 The video to be used as a conditioning input for the video generation.
             prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.

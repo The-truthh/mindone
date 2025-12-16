@@ -191,9 +191,7 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         )
         self.prompt_template_encode_start_idx = 129
 
-        self.vae_scale_factor_temporal = (
-            self.vae.config.temporal_compression_ratio if getattr(self, "vae", None) else 4
-        )
+        self.vae_scale_factor_temporal = self.vae.config.temporal_compression_ratio if getattr(self, "vae", None) else 4
         self.vae_scale_factor_spatial = self.vae.config.spatial_compression_ratio if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
@@ -785,12 +783,14 @@ class Kandinsky5T2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                 )
 
             if negative_prompt_embeds_qwen is None:
-                negative_prompt_embeds_qwen, negative_prompt_embeds_clip, negative_prompt_cu_seqlens = (
-                    self.encode_prompt(
-                        prompt=negative_prompt,
-                        max_sequence_length=max_sequence_length,
-                        dtype=dtype,
-                    )
+                (
+                    negative_prompt_embeds_qwen,
+                    negative_prompt_embeds_clip,
+                    negative_prompt_cu_seqlens,
+                ) = self.encode_prompt(
+                    prompt=negative_prompt,
+                    max_sequence_length=max_sequence_length,
+                    dtype=dtype,
                 )
 
         # 4. Prepare timesteps

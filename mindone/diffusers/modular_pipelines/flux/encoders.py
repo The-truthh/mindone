@@ -337,7 +337,9 @@ class FluxTextEncoderStep(ModularPipelineBlocks):
 
     @staticmethod
     def _get_t5_prompt_embeds(
-        components, prompt: Union[str, List[str]], max_sequence_length: int,
+        components,
+        prompt: Union[str, List[str]],
+        max_sequence_length: int,
     ):
         dtype = components.text_encoder_2.dtype
         prompt = [prompt] if isinstance(prompt, str) else prompt

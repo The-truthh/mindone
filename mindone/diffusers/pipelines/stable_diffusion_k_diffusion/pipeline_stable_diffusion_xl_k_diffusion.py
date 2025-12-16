@@ -528,7 +528,7 @@ class StableDiffusionXLKDiffusionPipeline(
             "1.0.0",
             "`upcast_vae` is deprecated. Please use `pipe.vae.to(ms.float32)`.",
         )
-        self.vae.to(dtype=torch.float32)
+        self.vae.to(dtype=ms.float32)
 
     @property
     def guidance_scale(self):

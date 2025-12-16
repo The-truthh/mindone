@@ -50,6 +50,8 @@ def retrieve_latents(
 
 
 class LTXLatentUpsamplePipeline(DiffusionPipeline):
+    model_cpu_offload_seq = ""
+
     def __init__(
         self,
         vae: AutoencoderKLLTXVideo,
@@ -105,9 +107,9 @@ class LTXLatentUpsamplePipeline(DiffusionPipeline):
         tensor.
 
         Args:
-            latent (`torch.Tensor`):
+            latent (`ms.Tensor`):
                 Input latents to normalize
-            reference_latents (`torch.Tensor`):
+            reference_latents (`ms.Tensor`):
                 The reference latents providing style statistics.
             factor (`float`):
                 Blending factor between original and transformed latent. Range: -10.0 to 10.0, Default: 1.0
@@ -246,7 +248,7 @@ class LTXLatentUpsamplePipeline(DiffusionPipeline):
         if not (0 <= tone_map_compression_ratio <= 1):
             raise ValueError("`tone_map_compression_ratio` must be in the range [0, 1]")
 
-    @ms._no_grad
+    @ms._no_grad()
     def __call__(
         self,
         video: Optional[List[PipelineImageInput]] = None,

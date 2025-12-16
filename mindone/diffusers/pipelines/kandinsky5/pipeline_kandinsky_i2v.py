@@ -17,10 +17,12 @@ from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 import regex as re
+from transformers import CLIPTokenizer, Qwen2VLProcessor
+
 import mindspore as ms
 from mindspore import mint
 from mindspore.mint.nn import functional as F
-from transformers import CLIPTokenizer, Qwen2VLProcessor
+
 from mindone.transformers import CLIPTextModel, Qwen2_5_VLForConditionalGeneration
 
 from ...callbacks import MultiPipelineCallbacks, PipelineCallback
@@ -31,15 +33,11 @@ from ...models.transformers import Kandinsky5Transformer3DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler
 
 # Add imports for offloading and tiling
-from ...utils import (
-    is_ftfy_available,
-    logging,
-)
+from ...utils import is_ftfy_available, logging
 from ...utils.mindspore_utils import randn_tensor
 from ...video_processor import VideoProcessor
 from ..pipeline_utils import DiffusionPipeline
 from .pipeline_output import KandinskyPipelineOutput
-
 
 XLA_AVAILABLE = False
 
@@ -192,9 +190,7 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         )
         self.prompt_template_encode_start_idx = 129
 
-        self.vae_scale_factor_temporal = (
-            self.vae.config.temporal_compression_ratio if getattr(self, "vae", None) else 4
-        )
+        self.vae_scale_factor_temporal = self.vae.config.temporal_compression_ratio if getattr(self, "vae", None) else 4
         self.vae_scale_factor_spatial = self.vae.config.spatial_compression_ratio if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
@@ -357,7 +353,9 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             input_ids=inputs["input_ids"],
             return_dict=True,
             output_hidden_states=True,
-        )["hidden_states"][-1][:, self.prompt_template_encode_start_idx :]
+        )[
+            "hidden_states"
+        ][-1][:, self.prompt_template_encode_start_idx :]
 
         attention_mask = inputs["attention_mask"][:, self.prompt_template_encode_start_idx :]
         cu_seqlens = mint.cumsum(attention_mask.sum(1), dim=0)
@@ -518,9 +516,7 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             num_videos_per_prompt
         )  # [len1, len1, ..., len2, len2, ...]
         # Reconstruct the cumulative lengths
-        repeated_cu_seqlens = mint.cat(
-            [ms.tensor([0], dtype=ms.int32), repeated_lengths.cumsum(0)]
-        )
+        repeated_cu_seqlens = mint.cat([ms.tensor([0], dtype=ms.int32), repeated_lengths.cumsum(0)])
 
         return prompt_embeds_qwen, prompt_embeds_clip, repeated_cu_seqlens
 
@@ -871,13 +867,15 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                 )
 
             if negative_prompt_embeds_qwen is None:
-                negative_prompt_embeds_qwen, negative_prompt_embeds_clip, negative_prompt_cu_seqlens = (
-                    self.encode_prompt(
-                        prompt=negative_prompt,
-                        num_videos_per_prompt=num_videos_per_prompt,
-                        max_sequence_length=max_sequence_length,
-                        dtype=dtype,
-                    )
+                (
+                    negative_prompt_embeds_qwen,
+                    negative_prompt_embeds_clip,
+                    negative_prompt_cu_seqlens,
+                ) = self.encode_prompt(
+                    prompt=negative_prompt,
+                    num_videos_per_prompt=num_videos_per_prompt,
+                    max_sequence_length=max_sequence_length,
+                    dtype=dtype,
                 )
 
         # 4. Prepare timesteps

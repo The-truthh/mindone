@@ -22,8 +22,8 @@ import numpy as np
 import PIL
 
 import mindspore as ms
-from mindspore import mint
 import mindspore.mint.nn.functional as F
+from mindspore import mint
 
 from .image_processor import VaeImageProcessor, is_valid_image, is_valid_image_imagelist
 
@@ -164,9 +164,7 @@ class VideoProcessor(VaeImageProcessor):
             samples = samples.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w)
 
             # Resize
-            samples = F.interpolate(
-                samples, size=(resized_height, resized_width), mode="bilinear", align_corners=False
-            )
+            samples = F.interpolate(samples, size=(resized_height, resized_width), mode="bilinear", align_corners=False)
 
             # Center Crop
             start_x = (resized_width - new_width) // 2

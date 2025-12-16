@@ -338,7 +338,8 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
             input_ids=text_input_ids,
             attention_mask=prompt_attention_mask,
             output_hidden_states=True,
-        )[1][-(num_hidden_layers_to_skip + 1)]
+            return_dict=True,
+        ).hidden_states[-(num_hidden_layers_to_skip + 1)]
         prompt_embeds = prompt_embeds.to(dtype=dtype)
 
         if crop_start is not None and crop_start > 0:
@@ -386,7 +387,9 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
                 f" {max_sequence_length} tokens: {removed_text}"
             )
 
-        prompt_embeds = self.text_encoder_2(ms.tensor(text_input_ids), output_hidden_states=False)[1]
+        prompt_embeds = self.text_encoder_2(
+            ms.tensor(text_input_ids), output_hidden_states=False, return_dict=True
+        ).pooler_output
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.tile((1, num_videos_per_prompt))

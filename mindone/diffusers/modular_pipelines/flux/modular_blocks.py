@@ -31,13 +31,7 @@ from .encoders import (
     FluxTextEncoderStep,
     FluxVaeEncoderDynamicStep,
 )
-from .inputs import (
-    FluxInputsDynamicStep,
-    FluxKontextInputsDynamicStep,
-    FluxKontextSetResolutionStep,
-    FluxTextInputStep,
-)
-
+from .inputs import FluxInputsDynamicStep, FluxKontextInputsDynamicStep, FluxKontextSetResolutionStep, FluxTextInputStep
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 

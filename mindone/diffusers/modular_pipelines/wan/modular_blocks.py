@@ -41,7 +41,6 @@ from .encoders import (
     WanVaeImageEncoderStep,
 )
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -77,7 +76,9 @@ class WanImage2VideoImageEncoderStep(SequentialPipelineBlocks):
 
     @property
     def description(self):
-        return "Image2Video Image Encoder step that resize the image and encode the image to generate the image embeddings"
+        return (
+            "Image2Video Image Encoder step that resize the image and encode the image to generate the image embeddings"
+        )
 
 
 ## vae encoder

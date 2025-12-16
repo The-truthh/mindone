@@ -240,7 +240,8 @@ class HunyuanVideoPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMixin):
             input_ids=text_input_ids,
             attention_mask=prompt_attention_mask,
             output_hidden_states=True,
-        )[1][-(num_hidden_layers_to_skip + 1)]
+            return_dict=True,
+        ).hidden_states[-(num_hidden_layers_to_skip + 1)]
         prompt_embeds = prompt_embeds.to(dtype=dtype)
 
         if crop_start is not None and crop_start > 0:
@@ -287,7 +288,9 @@ class HunyuanVideoPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMixin):
                 f" {max_sequence_length} tokens: {removed_text}"
             )
 
-        prompt_embeds = self.text_encoder_2(ms.tensor(text_input_ids), output_hidden_states=False)[1]
+        prompt_embeds = self.text_encoder_2(
+            ms.tensor(text_input_ids), output_hidden_states=False, return_dict=True
+        ).pooler_output
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.tile((1, num_videos_per_prompt))
@@ -551,8 +554,8 @@ class HunyuanVideoPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMixin):
                 the [paper](https://huggingface.co/papers/2210.03142) to learn more.
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
-            generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
-                A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
+            generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
+                A [`np.random.Generator`](https://numpy.org/doc/stable/reference/random/generator.html) to make
                 generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for image

@@ -2176,9 +2176,8 @@ def _convert_non_diffusers_wan_lora_to_diffusers(state_dict):
                 converted_state_dict["proj_out.lora_A.weight"] = original_state_dict.pop("head.head.diff")
                 down_matrix_head = converted_state_dict["proj_out.lora_A.weight"]
                 up_matrix_shape = (down_matrix_head.shape[0], converted_state_dict["proj_out.lora_B.bias"].shape[0])
-                converted_state_dict["proj_out.lora_B.weight"] = ms.Parameter(mint.eye(
-                    *up_matrix_shape, dtype=down_matrix_head.dtype
-                ).T, name="proj_out.lora_B.weight"
+                converted_state_dict["proj_out.lora_B.weight"] = ms.Parameter(
+                    mint.eye(*up_matrix_shape, dtype=down_matrix_head.dtype).T, name="proj_out.lora_B.weight"
                 )
 
         for text_time in ["text_embedding", "time_embedding"]:

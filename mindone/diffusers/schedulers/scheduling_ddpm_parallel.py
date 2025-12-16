@@ -656,7 +656,7 @@ class DDPMParallelScheduler(SchedulerMixin, ConfigMixin):
                 The original samples to which noise will be added.
             noise (`ms.Tensor`):
                 The noise to add to the samples.
-            timesteps (`torch.IntTensor`):
+            timesteps (`ms.Tensor`):
                 The timesteps indicating the noise level for each sample.
 
         Returns:
@@ -696,7 +696,7 @@ class DDPMParallelScheduler(SchedulerMixin, ConfigMixin):
                 The input sample.
             noise (`ms.Tensor`):
                 The noise tensor.
-            timesteps (`torch.IntTensor`):
+            timesteps (`ms.Tensor`):
                 The timesteps for velocity computation.
 
         Returns:

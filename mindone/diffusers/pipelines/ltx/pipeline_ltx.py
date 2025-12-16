@@ -598,10 +598,10 @@ class LTXPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraLoaderMixi
                 provided, text embeddings will be generated from `prompt` input argument.
             prompt_attention_mask (`ms.Tensor`, *optional*):
                 Pre-generated attention mask for text embeddings.
-            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
+            negative_prompt_embeds (`ms.Tensor`, *optional*):
                 Pre-generated negative text embeddings. For PixArt-Sigma this negative prompt should be "". If not
                 provided, negative_prompt_embeds will be generated from `negative_prompt` input argument.
-            negative_prompt_attention_mask (`torch.FloatTensor`, *optional*):
+            negative_prompt_attention_mask (`ms.Tensor`, *optional*):
                 Pre-generated attention mask for negative text embeddings.
             decode_timestep (`float`, defaults to `0.0`):
                 The timestep at which generated video is decoded.

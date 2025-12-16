@@ -8,7 +8,6 @@ from packaging import version
 
 from ..utils import logging
 
-
 logger = logging.get_logger(__name__)
 
 # Mapping for deprecated Transformers classes to their replacements

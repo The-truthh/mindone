@@ -253,6 +253,7 @@ def is_nltk_available():
 def is_aiter_available():
     return _aiter_available
 
+
 # docstyle-ignore
 INFLECT_IMPORT_ERROR = """
 {0} requires the inflect library but it was not found in your environment. You can install it with pip: `pip install
@@ -413,6 +414,22 @@ def is_mindspore_version(operation: str, version: str):
             A string version of MindSpore
     """
     return compare_versions(parse(_mindspore_version), operation, version)
+
+
+@cache
+def is_transformers_version(operation: str, version: str):
+    """
+    Compares the current Transformers version to a given reference with an operation.
+
+    Args:
+        operation (`str`):
+            A string representation of an operator, such as `">"` or `"<="`
+        version (`str`):
+            A version string
+    """
+    if not _transformers_available:
+        return False
+    return compare_versions(parse(_transformers_version), operation, version)
 
 
 @cache

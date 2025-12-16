@@ -452,10 +452,9 @@ class ModelMixin(nn.Cell, PushToHubMixin):
                 attention as backend.
         """
         from .attention import AttentionModuleMixin
-        from .attention_dispatch import (
+        from .attention_dispatch import (  # _maybe_download_kernel_for_backend,
             AttentionBackendName,
             _check_attention_backend_requirements,
-            # _maybe_download_kernel_for_backend,
         )
 
         # TODO: the following will not be required when everything is refactored to AttentionModuleMixin

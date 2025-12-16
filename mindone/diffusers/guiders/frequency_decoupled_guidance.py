@@ -171,9 +171,7 @@ class FrequencyDecoupledGuidance(BaseGuidance):
         # Whether to perform guidance rescaling in frequency space (right after the CFG update) or data space (after
         # transforming from frequency space back to data space)
         if guidance_rescale_space not in ["data", "freq"]:
-            raise ValueError(
-                f"Guidance rescale space is {guidance_rescale_space} but must be one of `data` or `freq`."
-            )
+            raise ValueError(f"Guidance rescale space is {guidance_rescale_space} but must be one of `data` or `freq`.")
         self.guidance_rescale_space = guidance_rescale_space
 
         if parallel_weights is None:

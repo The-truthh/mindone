@@ -16,6 +16,7 @@ from typing import Any, List, Tuple, Union
 
 import numpy as np
 import PIL
+
 import mindspore as ms
 
 from ...configuration_utils import FrozenDict

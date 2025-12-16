@@ -713,8 +713,8 @@ class ConsisIDPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin):
                 more faithful image generation, while later steps reduce it for more diverse and natural results.
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of videos to generate per prompt.
-            generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
-                One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+            generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
+                One or a list of [np.random.Generator(s)](https://numpy.org/doc/stable/reference/random/generator.html)
                 to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image

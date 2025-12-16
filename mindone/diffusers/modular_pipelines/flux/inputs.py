@@ -26,7 +26,6 @@ from ..modular_pipeline_utils import InputParam, OutputParam
 from ..qwenimage.inputs import calculate_dimension_from_latents, repeat_tensor_to_batch_size
 from .modular_pipeline import FluxModularPipeline
 
-
 logger = logging.get_logger(__name__)
 
 

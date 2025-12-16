@@ -107,7 +107,7 @@ class ContextParallelConfig:
         """Dimension names for the device mesh."""
         return ("ring", "ulysses")
 
-    def setup(self, rank: int, world_size: int, device: torch.device, mesh: torch.distributed.device_mesh.DeviceMesh):
+    def setup(self, rank: int, world_size: int, device: str, mesh):
         self._rank = rank
         self._world_size = world_size
         self._device = device
@@ -214,9 +214,7 @@ ContextParallelInputType = Dict[
 
 # A dictionary where keys denote the output to be gathered across context parallel region, and the
 # value denotes the gathering configuration.
-ContextParallelOutputType = Union[
-    ContextParallelOutput, List[ContextParallelOutput], Tuple[ContextParallelOutput, ...]
-]
+ContextParallelOutputType = Union[ContextParallelOutput, List[ContextParallelOutput], Tuple[ContextParallelOutput, ...]]
 
 # A dictionary where keys denote the module id, and the value denotes how the inputs/outputs of
 # the module should be split/gathered across context parallel region.

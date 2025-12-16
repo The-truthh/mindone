@@ -548,7 +548,6 @@ class AudioLDM2UNet2DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNe
             padding=conv_out_padding,
         )
 
-
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attention_slice
     def set_attention_slice(self, slice_size):
         r"""

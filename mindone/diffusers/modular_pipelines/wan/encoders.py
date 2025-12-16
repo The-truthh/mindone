@@ -28,12 +28,12 @@ from mindone.transformers import CLIPVisionModel, UMT5EncoderModel
 from ...configuration_utils import FrozenDict
 from ...guiders import ClassifierFreeGuidance
 from ...image_processor import PipelineImageInput
+from ...layers_compat import center_crop
 from ...models import AutoencoderKLWan
 from ...utils import is_ftfy_available, logging
 from ...video_processor import VideoProcessor
 from ..modular_pipeline import ModularPipelineBlocks, PipelineState
 from ..modular_pipeline_utils import ComponentSpec, InputParam, OutputParam
-from ...layers_compat import center_crop
 from .modular_pipeline import WanModularPipeline
 
 if is_ftfy_available():
@@ -143,14 +143,8 @@ def encode_vae_image(
     else:
         video_latents = retrieve_latents(vae, vae.encode(video_tensor)[0], sample_mode="argmax")
 
-    latents_mean = (
-        ms.tensor(vae.config.latents_mean)
-        .view(1, latent_channels, 1, 1, 1)
-        .to(video_latents.dtype)
-    )
-    latents_std = 1.0 / ms.tensor(vae.config.latents_std).view(1, latent_channels, 1, 1, 1).to(
-        video_latents.dtype
-    )
+    latents_mean = ms.tensor(vae.config.latents_mean).view(1, latent_channels, 1, 1, 1).to(video_latents.dtype)
+    latents_std = 1.0 / ms.tensor(vae.config.latents_std).view(1, latent_channels, 1, 1, 1).to(video_latents.dtype)
     video_latents = (video_latents - latents_mean) * latents_std
 
     return video_latents
@@ -519,9 +513,7 @@ class WanVaeImageEncoderStep(ModularPipelineBlocks):
         width = block_state.width or components.default_width
         num_frames = block_state.num_frames or components.default_num_frames
 
-        image_tensor = components.video_processor.preprocess(image, height=height, width=width).to(
-            dtype=dtype
-        )
+        image_tensor = components.video_processor.preprocess(image, height=height, width=width).to(dtype=dtype)
 
         if image_tensor.dim() == 4:
             image_tensor = image_tensor.unsqueeze(2)

@@ -285,10 +285,10 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
             attention_mask=ms.tensor(attention_mask),
             output_hidden_states=True,
             output_attentions=True,
+            return_dict=True,
         )
 
-        # prompt_embeds = outputs.hidden_states[1:]
-        prompt_embeds = outputs[1][1:]
+        prompt_embeds = outputs.hidden_states[1:]
         prompt_embeds = mint.stack(prompt_embeds, dim=0)
         return prompt_embeds
 

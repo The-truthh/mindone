@@ -4,12 +4,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import mindspore as ms
-from mindspore import mint
 import mindspore.nn as nn
+from mindspore import mint
 
 from ..utils import logging
 from .hooks import HookRegistry, ModelHook, StateManager
-
 
 logger = logging.get_logger(__name__)
 _TAYLORSEER_CACHE_HOOK = "taylorseer_cache"

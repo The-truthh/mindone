@@ -233,7 +233,7 @@ class UnCLIPImageVariationPipeline(DeprecatedPipelineMixin, DiffusionPipeline):
                 The number of denoising steps for super resolution. More denoising steps usually lead to a higher
                 quality image at the expense of slower inference.
             generator (`np.random.Generator`, *optional*):
-                A [`np.random.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
+                A [`np.random.Generator`](https://numpy.org/doc/stable/reference/random/generator.html) to make
                 generation deterministic.
             decoder_latents (`ms.Tensor` of shape (batch size, channels, height, width), *optional*):
                 Pre-generated noisy latents to be used as inputs for the decoder.

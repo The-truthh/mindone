@@ -206,10 +206,7 @@ class BlockState:
                     if hasattr(val, "shape") and hasattr(val, "dtype"):
                         formatted_dict[k] = f"Tensor(shape={val.shape}, dtype={val.dtype})"
                     elif (
-                        isinstance(val, list)
-                        and len(val) > 0
-                        and hasattr(val[0], "shape")
-                        and hasattr(val[0], "dtype")
+                        isinstance(val, list) and len(val) > 0 and hasattr(val[0], "shape") and hasattr(val[0], "dtype")
                     ):
                         shapes = [t.shape for t in val]
                         formatted_dict[k] = f"List[{len(val)}] of Tensors with shapes {shapes}"
@@ -312,9 +309,7 @@ class ModularPipelineBlocks(ConfigMixin, PushToHubMixin):
 
         config = cls.load_config(pretrained_model_name_or_path, **hub_kwargs)
         has_remote_code = "auto_map" in config and cls.__name__ in config["auto_map"]
-        trust_remote_code = resolve_trust_remote_code(
-            trust_remote_code, pretrained_model_name_or_path, has_remote_code
-        )
+        trust_remote_code = resolve_trust_remote_code(trust_remote_code, pretrained_model_name_or_path, has_remote_code)
         if not has_remote_code and trust_remote_code:
             raise ValueError(
                 "Selected model repository does not happear to have any custom code or does not have a valid `config.json` file."
@@ -330,9 +325,7 @@ class ModularPipelineBlocks(ConfigMixin, PushToHubMixin):
             **hub_kwargs,
         )
         expected_kwargs, optional_kwargs = block_cls._get_signature_keys(block_cls)
-        block_kwargs = {
-            name: kwargs.get(name) for name in kwargs if name in expected_kwargs or name in optional_kwargs
-        }
+        block_kwargs = {name: kwargs.get(name) for name in kwargs if name in expected_kwargs or name in optional_kwargs}
 
         return block_cls(**block_kwargs)
 

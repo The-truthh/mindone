@@ -1083,7 +1083,7 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
             control_image (`ms.Tensor`, `PIL.Image.Image`, `np.ndarray`, `List[ms.Tensor]`, `List[PIL.Image.Image]`, `List[np.ndarray]`,:
                     `List[List[ms.Tensor]]`, `List[List[np.ndarray]]` or `List[List[PIL.Image.Image]]`):
                 The ControlNet input condition. ControlNet uses this input condition to generate guidance to Unet. If
-                the type is specified as `torch.Tensor`, it is passed to ControlNet as is. `PIL.Image.Image` can also
+                the type is specified as `ms.Tensor`, it is passed to ControlNet as is. `PIL.Image.Image` can also
                 be accepted as an image. The dimensions of the output image defaults to `image`'s dimensions. If height
                 and/or width are passed, `image` is resized according to them. If multiple ControlNets are specified in
                 init, images must be passed as a list such that each element of the list can be correctly batched for
@@ -1124,7 +1124,7 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
                 Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only
                 applies to [`schedulers.DDIMScheduler`], will be ignored for others.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+                One or a list of [np.random.Generator(s)](https://numpy.org/doc/stable/reference/random/generator.html)
                 to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image

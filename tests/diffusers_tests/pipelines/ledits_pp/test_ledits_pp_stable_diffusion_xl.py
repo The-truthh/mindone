@@ -242,6 +242,9 @@ class LEditsPPPipelineStableDiffusionXLFastTests(PipelineTesterMixin, unittest.T
     @data(*test_cases)
     @unpack
     def test_ledits_pp_sdxl(self, mode, dtype):
+        if dtype == "float16":
+            pytest.skip("LEditsPPPipelineStableDiffusionXL does not support float16 on CPU in PyTorch")
+
         ms.set_context(mode=mode)
 
         pt_components, ms_components = self.get_dummy_components()

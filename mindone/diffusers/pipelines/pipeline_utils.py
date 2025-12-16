@@ -57,6 +57,7 @@ from ..utils import (
     _get_detailed_type,
     _is_valid_type,
     deprecate,
+    is_transformers_version,
     logging,
     maybe_import_module_in_mindone,
     numpy_to_pil,

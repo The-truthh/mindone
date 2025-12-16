@@ -25,7 +25,6 @@ from ..modular_pipeline import BlockState, LoopSequentialPipelineBlocks, Modular
 from ..modular_pipeline_utils import ComponentSpec, ConfigSpec, InputParam
 from .modular_pipeline import WanModularPipeline
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -215,9 +214,7 @@ class WanLoopDenoiser(ModularPipelineBlocks):
         return inputs
 
     @ms._no_grad()
-    def __call__(
-        self, components: WanModularPipeline, block_state: BlockState, i: int, t: ms.Tensor
-    ) -> PipelineState:
+    def __call__(self, components: WanModularPipeline, block_state: BlockState, i: int, t: ms.Tensor) -> PipelineState:
         components.guider.set_state(step=i, num_inference_steps=block_state.num_inference_steps, timestep=t)
 
         # The guider splits model inputs into separate batches for conditional/unconditional predictions.
@@ -342,9 +339,7 @@ class Wan22LoopDenoiser(ModularPipelineBlocks):
         return inputs
 
     @ms._no_grad()
-    def __call__(
-        self, components: WanModularPipeline, block_state: BlockState, i: int, t: ms.Tensor
-    ) -> PipelineState:
+    def __call__(self, components: WanModularPipeline, block_state: BlockState, i: int, t: ms.Tensor) -> PipelineState:
         boundary_timestep = components.config.boundary_ratio * components.num_train_timesteps
         if t >= boundary_timestep:
             block_state.current_model = components.transformer

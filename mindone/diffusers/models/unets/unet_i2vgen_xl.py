@@ -35,11 +35,7 @@ from ..attention_processor import (
 from ..embeddings import TimestepEmbedding, Timesteps
 from ..modeling_utils import ModelMixin
 from ..transformers.transformer_temporal import TransformerTemporalModel
-from .unet_3d_blocks import (
-    UNetMidBlock3DCrossAttn,
-    get_down_block,
-    get_up_block,
-)
+from .unet_3d_blocks import UNetMidBlock3DCrossAttn, get_down_block, get_up_block
 from .unet_3d_condition import UNet3DConditionOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name

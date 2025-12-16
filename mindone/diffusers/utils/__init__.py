@@ -61,6 +61,7 @@ from .import_utils import (
     is_scipy_available,
     is_sentencepiece_available,
     is_transformers_available,
+    is_transformers_version,
     maybe_import_module_in_mindone,
 )
 from .loading_utils import get_module_from_name, get_submodule_by_name, load_image, load_video

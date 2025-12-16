@@ -45,13 +45,13 @@ Todo:
 
 import math
 import numbers
-from typing import Optional, Union, Tuple, List
+from typing import List, Optional, Tuple, Union
 
 from packaging.version import parse
 
 import mindspore as ms
-from mindspore import mint, nn, ops
 import mindspore.mint.nn.functional as F
+from mindspore import mint, nn, ops
 from mindspore._c_expression.amp import AmpLevel, create_amp_strategy
 from mindspore.common.api import _function_forbid_reuse
 from mindspore.common.initializer import One, initializer
@@ -878,31 +878,29 @@ def flash_attention_op(
 def _get_dimensions(img: ms.Tensor) -> Tuple[int, int, int]:
     if img.ndim < 2:
         raise ValueError("Input image must have at least H, W dimensions.")
-        
+
     H = img.shape[-2]
     W = img.shape[-1]
     C = img.shape[-3] if img.ndim >= 3 else 1
-    
+
     return C, H, W
+
 
 def _pad(img: ms.Tensor, padding_ltrb: List[int], fill: float = 0.0) -> ms.Tensor:
     left, top, right, bottom = padding_ltrb
     padding = [left, right, top, bottom]
-    return F.pad(img, padding, mode='constant', value=fill)
+    return F.pad(img, padding, mode="constant", value=fill)
 
 
 def _crop(img: ms.Tensor, top: int, left: int, height: int, width: int) -> ms.Tensor:
     # Height slice: [top : top + height]
     # Width slice: [left : left + width]
-    return img[..., top: top + height, left: left + width]
+    return img[..., top : top + height, left : left + width]
 
 
-def center_crop(
-    img: ms.Tensor, 
-    output_size: Union[int, List[int], Tuple[int, int]]
-) -> ms.Tensor:
+def center_crop(img: ms.Tensor, output_size: Union[int, List[int], Tuple[int, int]]) -> ms.Tensor:
     """
-    Equivalent implementation of torchvision.transforms.functional.center_crop 
+    Equivalent implementation of torchvision.transforms.functional.center_crop
     including the padding logic.
     """
 
@@ -913,9 +911,8 @@ def center_crop(
 
     _, image_height, image_width = _get_dimensions(img)
     crop_height, crop_width = output_size
-        
+
     if crop_width > image_width or crop_height > image_height:
-        
         padding_ltrb = [
             (crop_width - image_width) // 2 if crop_width > image_width else 0,
             (crop_height - image_height) // 2 if crop_height > image_height else 0,
@@ -923,11 +920,11 @@ def center_crop(
             (crop_height - image_height + 1) // 2 if crop_height > image_height else 0,
         ]
 
-        img = _pad(img, padding_ltrb, fill=0)  
+        img = _pad(img, padding_ltrb, fill=0)
         _, image_height, image_width = _get_dimensions(img)
         if crop_width == image_width and crop_height == image_height:
             return img
-    
+
     crop_top = int(mint.round(ms.tensor((image_height - crop_height) / 2.0)).item())
     crop_left = int(mint.round(ms.tensor((image_width - crop_width) / 2.0)).item())
 

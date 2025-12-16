@@ -105,7 +105,7 @@ class SplitInferenceModule(nn.Cell):
                 Positional arguments that are passed directly to the `module` without modification.
             **kwargs (`Dict[str, torch.Tensor]`):
                 Keyword arguments passed to the underlying `module`. Only keyword arguments whose names match the
-                entries in `input_kwargs_to_split` and are of type `torch.Tensor` will be split. The remaining keyword
+                entries in `input_kwargs_to_split` and are of type `ms.Tensor` will be split. The remaining keyword
                 arguments are passed unchanged.
 
         Returns:

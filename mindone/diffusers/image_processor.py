@@ -962,9 +962,7 @@ class InpaintProcessor(ConfigMixin):
             raise ValueError("output_type must be 'pil' if crops_coords is provided")
 
         elif crops_coords is not None:
-            image = [
-                self._image_processor.apply_overlay(original_mask, original_image, i, crops_coords) for i in image
-            ]
+            image = [self._image_processor.apply_overlay(original_mask, original_image, i, crops_coords) for i in image]
 
         return image
 

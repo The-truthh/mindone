@@ -25,7 +25,14 @@ from transformers import RobertaTokenizer, RobertaTokenizerFast, T5Tokenizer, T5
 import mindspore
 from mindspore import mint
 
-from ....transformers import ClapFeatureExtractor, ClapModel, GPT2LMHeadModel, SpeechT5HifiGan, T5EncoderModel, VitsModel
+from ....transformers import (
+    ClapFeatureExtractor,
+    ClapModel,
+    GPT2LMHeadModel,
+    SpeechT5HifiGan,
+    T5EncoderModel,
+    VitsModel,
+)
 from ...models import AutoencoderKL
 from ...schedulers import KarrasDiffusionSchedulers
 from ...utils import deprecate, logging

@@ -23,10 +23,7 @@ from ...configuration_utils import FrozenDict
 from ...image_processor import VaeImageProcessor
 from ...models import AutoencoderKL
 from ...utils import deprecate, logging
-from ..modular_pipeline import (
-    ModularPipelineBlocks,
-    PipelineState,
-)
+from ..modular_pipeline import ModularPipelineBlocks, PipelineState
 from ..modular_pipeline_utils import ComponentSpec, InputParam, OutputParam
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -79,7 +76,7 @@ class StableDiffusionXLDecodeStep(ModularPipelineBlocks):
         deprecate(
             "upcast_vae",
             "1.0.0",
-            "`upcast_vae` is deprecated. Please use `pipe.vae.to(torch.float32)`. For more details, please refer to: https://github.com/huggingface/diffusers/pull/12619#issue-3606633695.",
+            "`upcast_vae` is deprecated. Please use `pipe.vae.to(ms.float32)`.",
         )
         components.vae.to(dtype=ms.float32)
 

@@ -82,9 +82,7 @@ def repeat_tensor_to_batch_size(
     elif input_tensor.shape[0] == batch_size:
         repeat_by = num_videos_per_prompt
     else:
-        raise ValueError(
-            f"`{input_name}` must have have batch size 1 or {batch_size}, but got {input_tensor.shape[0]}"
-        )
+        raise ValueError(f"`{input_name}` must have have batch size 1 or {batch_size}, but got {input_tensor.shape[0]}")
 
     # expand the tensor to match the batch_size * num_videos_per_prompt
     input_tensor = input_tensor.repeat_interleave(repeat_by, dim=0)
@@ -575,9 +573,7 @@ class WanPrepareFirstFrameLatentsStep(ModularPipelineBlocks):
         mask_lat_size[:, :, list(range(1, block_state.num_frames))] = 0
 
         first_frame_mask = mask_lat_size[:, :, 0:1]
-        first_frame_mask = mint.repeat_interleave(
-            first_frame_mask, dim=2, repeats=components.vae_scale_factor_temporal
-        )
+        first_frame_mask = mint.repeat_interleave(first_frame_mask, dim=2, repeats=components.vae_scale_factor_temporal)
         mask_lat_size = mint.concat([first_frame_mask, mask_lat_size[:, :, 1:, :]], dim=2)
         mask_lat_size = mask_lat_size.view(
             batch_size, -1, components.vae_scale_factor_temporal, latent_height, latent_width
@@ -612,17 +608,13 @@ class WanPrepareFirstLastFrameLatentsStep(ModularPipelineBlocks):
         mask_lat_size[:, :, list(range(1, block_state.num_frames - 1))] = 0
 
         first_frame_mask = mask_lat_size[:, :, 0:1]
-        first_frame_mask = mint.repeat_interleave(
-            first_frame_mask, dim=2, repeats=components.vae_scale_factor_temporal
-        )
+        first_frame_mask = mint.repeat_interleave(first_frame_mask, dim=2, repeats=components.vae_scale_factor_temporal)
         mask_lat_size = mint.concat([first_frame_mask, mask_lat_size[:, :, 1:, :]], dim=2)
         mask_lat_size = mask_lat_size.view(
             batch_size, -1, components.vae_scale_factor_temporal, latent_height, latent_width
         )
         mask_lat_size = mask_lat_size.transpose(1, 2)
-        block_state.first_last_frame_latents = mint.concat(
-            [mask_lat_size, block_state.first_last_frame_latents], dim=1
-        )
+        block_state.first_last_frame_latents = mint.concat([mask_lat_size, block_state.first_last_frame_latents], dim=1)
 
         self.set_block_state(state, block_state)
         return components, state

@@ -17,7 +17,6 @@ from ...loaders import FluxLoraLoaderMixin, TextualInversionLoaderMixin
 from ...utils import logging
 from ..modular_pipeline import ModularPipeline
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 

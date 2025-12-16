@@ -164,9 +164,7 @@ class FluxKontextLoopDenoiser(ModularPipelineBlocks):
         ]
 
     @ms._no_grad()
-    def __call__(
-        self, components: FluxModularPipeline, block_state: BlockState, i: int, t: ms.Tensor
-    ) -> PipelineState:
+    def __call__(self, components: FluxModularPipeline, block_state: BlockState, i: int, t: ms.Tensor) -> PipelineState:
         latents = block_state.latents
         latent_model_input = latents
         image_latents = block_state.image_latents

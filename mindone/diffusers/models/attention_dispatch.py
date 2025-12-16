@@ -15,6 +15,7 @@
 import contextlib
 import functools
 import inspect
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
@@ -94,11 +95,13 @@ def custom_op_no_op(name, fn=None, /, *, mutates_args, device_types=None, schema
 
     return wrap if fn is None else fn
 
+
 def register_fake_no_op(op, fn=None, /, *, lib=None, _stacklevel=1):
     def wrap(func):
         return func
 
     return wrap if fn is None else fn
+
 
 _custom_op = custom_op_no_op
 _register_fake = register_fake_no_op
@@ -377,9 +380,7 @@ def _check_attention_backend_requirements(backend: AttentionBackendName) -> None
 
     elif backend == AttentionBackendName.AITER:
         if not _CAN_USE_AITER_ATTN:
-            raise RuntimeError(
-                f"Aiter Attention backend '{backend.value}' is not usable."
-            )
+            raise RuntimeError(f"Aiter Attention backend '{backend.value}' is not usable.")
 
     elif backend in [
         AttentionBackendName.SAGE,

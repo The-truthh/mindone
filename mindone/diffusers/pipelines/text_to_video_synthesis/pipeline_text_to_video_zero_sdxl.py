@@ -21,7 +21,14 @@ from ...image_processor import VaeImageProcessor
 from ...loaders import StableDiffusionXLLoraLoaderMixin, TextualInversionLoaderMixin
 from ...models import AutoencoderKL, UNet2DConditionModel
 from ...schedulers import KarrasDiffusionSchedulers
-from ...utils import deprecate, BaseOutput, is_invisible_watermark_available, logging, scale_lora_layers, unscale_lora_layers
+from ...utils import (
+    BaseOutput,
+    deprecate,
+    is_invisible_watermark_available,
+    logging,
+    scale_lora_layers,
+    unscale_lora_layers,
+)
 from ...utils.mindspore_utils import randn_tensor
 from ..pipeline_utils import DeprecatedPipelineMixin, DiffusionPipeline, StableDiffusionMixin
 

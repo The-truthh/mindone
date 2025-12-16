@@ -103,8 +103,7 @@ class PeftAdapterMixin:
                       the Hub.
                     - A path to a *directory* (for example `./my_model_directory`) containing the model weights saved
                       with [`ModelMixin.save_pretrained`].
-                    - A [torch state
-                      dict](https://pytorch.org/tutorials/beginner/saving_loading_models.html#what-is-a-state-dict).
+                    - A mindspore state dict.
 
             prefix (`str`, *optional*): Prefix to filter the state dict.
 
@@ -368,7 +367,7 @@ class PeftAdapterMixin:
             adapter_name: (`str`, defaults to "default"): The name of the adapter to serialize. Useful when the
                 underlying model has multiple adapters loaded.
             upcast_before_saving (`bool`, defaults to `False`):
-                Whether to cast the underlying model to `torch.float32` before serialization.
+                Whether to cast the underlying model to `ms.float32` before serialization.
             safe_serialization (`bool`, *optional*, defaults to `True`):
                 Whether to save the model using `safetensors` or the traditional PyTorch way with `pickle`.
             weight_name: (`str`, *optional*, defaults to `None`): Name of the file to serialize the state dict with.

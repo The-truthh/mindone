@@ -2696,6 +2696,7 @@ class FusedHunyuanAttnProcessor2_0:
 
     def __init__(self):
         from .embeddings import apply_rotary_emb
+
         self.apply_rotary_emb = apply_rotary_emb
 
     def __call__(

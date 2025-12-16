@@ -186,7 +186,7 @@ class LatteTransformer3DModel(ModelMixin, ConfigMixin, CacheMixin):
                 Input `hidden_states`.
             timestep ( `ms.Tensor`, *optional*):
                 Used to indicate denoising step. Optional timestep to be applied as an embedding in `AdaLayerNorm`.
-            encoder_hidden_states ( `torch.FloatTensor` of shape `(batch size, sequence len, embed dims)`, *optional*):
+            encoder_hidden_states ( `ms.Tensor` of shape `(batch size, sequence len, embed dims)`, *optional*):
                 Conditional embeddings for cross attention layer. If not given, cross-attention defaults to
                 self-attention.
             encoder_attention_mask ( `ms.Tensor`, *optional*):

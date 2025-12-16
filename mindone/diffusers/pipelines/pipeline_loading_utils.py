@@ -43,6 +43,7 @@ from ..utils import (
     deprecate,
     get_class_from_dynamic_module,
     is_transformers_available,
+    is_transformers_version,
     logging,
     maybe_import_module_in_mindone,
 )
@@ -348,7 +349,6 @@ def maybe_raise_or_warn(library_name, class_name, importable_classes, passed_cla
             class_obj = getattr(library, class_name)
             class_candidates = {c: getattr(library, c, None) for c in importable_classes.keys()}
         elif library_name == "transformers":
-
             # Handle deprecated Transformers classes
             if library_name == "transformers":
                 class_name = _maybe_remap_transformers_class(class_name) or class_name
@@ -433,7 +433,6 @@ def get_class_obj_and_candidates(
             class_obj = getattr(library, class_name)
             class_candidates = {c: getattr(library, c, None) for c in importable_classes.keys()}
         elif library_name == "transformers":
-
             # Handle deprecated Transformers classes
             if library_name == "transformers":
                 class_name = _maybe_remap_transformers_class(class_name) or class_name
@@ -617,9 +616,6 @@ def load_sub_model(
             )
         elif is_transformers_model and loading_kwargs["variant"] is None:
             loading_kwargs.pop("variant")
-
-    if is_transformers_model and is_transformers_version(">=", "4.57.0"):
-        loading_kwargs.pop("offload_state_dict")
 
     # check if the module is in a subdirectory
     if dduf_entries:

@@ -81,7 +81,7 @@ class I2VGenXLPipelineOutput(BaseOutput):
      Output class for image-to-video pipeline.
 
      Args:
-        frames (`torch.Tensor`, `np.ndarray`, or List[List[PIL.Image.Image]]):
+        frames (`ms.Tensor`, `np.ndarray`, or List[List[PIL.Image.Image]]):
             List of video outputs - It can be a nested list of length `batch_size,` with each sub-list containing
             denoised
      PIL image sequences of length `num_frames.` It can also be a NumPy array or Torch tensor of shape
@@ -551,7 +551,7 @@ class I2VGenXLPipeline(
                 consistency between frames, but also the higher the memory consumption. By default, the decoder will
                 decode all frames at once for maximal quality. Reduce `decode_chunk_size` to reduce memory usage.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                A [`np.random.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
+                A [`np.random.Generator`](https://numpy.org/doc/stable/reference/random/generator.html) to make
                 generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for image

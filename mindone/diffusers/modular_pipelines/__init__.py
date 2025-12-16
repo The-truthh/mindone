@@ -58,6 +58,7 @@ if TYPE_CHECKING:
         SequentialPipelineBlocks,
     )
     from .modular_pipeline_utils import ComponentSpec, ConfigSpec, InputParam, InsertableDict, OutputParam
+
     # from .qwenimage import (
     #     QwenImageAutoBlocks,
     #     QwenImageEditAutoBlocks,

@@ -41,7 +41,8 @@ from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast,
 from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from ...processing_utils import Unpack
-from ...utils import TransformersKwargs
+from ...utils import TransformersKwargs, can_return_tuple
+from ...utils.generic import check_model_inputs
 
 logger = logging.get_logger(__name__)
 
@@ -378,6 +379,10 @@ class LlamaPreTrainedModel(PreTrainedModel):
     _supports_attention_backend = True
     _supports_jit = True
     _is_stateful = True
+    _can_record_outputs = {
+        "hidden_states": LlamaDecoderLayer,
+        "attentions": LlamaAttention,
+    }
 
     def _init_weights(self, cell):
         std = self.config.initializer_range
@@ -540,6 +545,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         logger.info(f"{self.__class__.__name__}: enable recompute.")
 
+    @check_model_inputs
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
     def construct(
         self,
@@ -551,7 +557,7 @@ class LlamaModel(LlamaPreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
         cache_position: Optional[ms.Tensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
@@ -598,9 +604,6 @@ class LlamaModel(LlamaPreTrainedModel):
             )
 
         hidden_states = self.norm(hidden_states)
-
-        if not return_dict:
-            return tuple(v for v in [hidden_states] if v is not None)
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
@@ -734,6 +737,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
         self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
 
+    @can_return_tuple
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
     def construct(
         self,
@@ -746,7 +750,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
         cache_position: Optional[ms.Tensor] = None,
         logits_to_keep: Union[int, ms.Tensor] = 0,
         **kwargs: Unpack[TransformersKwargs],
@@ -796,8 +800,8 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             return_dict=return_dict,
             cache_position=cache_position,
         )
-        hidden_states = outputs[0]
 
+        hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
@@ -897,7 +901,7 @@ class LlamaForSequenceClassification(LlamaPreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, SequenceClassifierOutputWithPast]:
         r"""
         labels (`ms.Tensor` of shape `(batch_size,)`, *optional*):

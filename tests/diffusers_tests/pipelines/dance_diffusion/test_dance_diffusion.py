@@ -21,6 +21,7 @@ import unittest
 import numpy as np
 import torch
 from ddt import data, ddt, unpack
+from packaging.version import Version
 
 import mindspore as ms
 
@@ -91,6 +92,11 @@ class DanceDiffusionPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
     @data(*test_cases)
     @unpack
     def test_dance_diffusion(self, mode, dtype):
+        last_supported_version = Version("0.33.1")
+        current_version = Version(diffusers.__version__)
+        if current_version > last_supported_version:
+            pytest.skip(f"DanceDiffusionPipeline is not supported in diffusers version {current_version}")
+
         ms.set_context(mode=mode)
 
         pt_components, ms_components = self.get_dummy_components()
@@ -131,6 +137,11 @@ class DanceDiffusionPipelineIntegrationTests(PipelineTesterMixin, unittest.TestC
     @data(*test_cases)
     @unpack
     def test_dance_diffusion(self, mode, dtype):
+        last_supported_version = Version("0.33.1")
+        current_version = Version(diffusers.__version__)
+        if current_version > last_supported_version:
+            pytest.skip(f"DanceDiffusionPipeline is not supported in diffusers version {current_version}")
+
         ms.set_context(mode=mode)
         ms_dtype = getattr(ms, dtype)
 
