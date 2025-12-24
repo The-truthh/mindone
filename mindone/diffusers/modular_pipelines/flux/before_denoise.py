@@ -450,7 +450,6 @@ class FluxImg2ImgPrepareLatentsStep(ModularPipelineBlocks):
     def intermediate_outputs(self) -> List[OutputParam]:
         return [
             OutputParam(
-            OutputParam(
                 name="initial_noise",
                 type_hint=ms.Tensor,
                 description="The initial random noised used for inpainting denoising.",
@@ -526,9 +525,7 @@ class FluxRoPEInputsStep(ModularPipelineBlocks):
 
         prompt_embeds = block_state.prompt_embeds
         dtype = prompt_embeds.dtype
-        block_state.txt_ids = mint.zeros((prompt_embeds.shape[1], 3)).to(
-            dtype=prompt_embeds.dtype
-        )
+        block_state.txt_ids = mint.zeros((prompt_embeds.shape[1], 3)).to(dtype=prompt_embeds.dtype)
 
         height = 2 * (int(block_state.height) // (components.vae_scale_factor * 2))
         width = 2 * (int(block_state.width) // (components.vae_scale_factor * 2))
@@ -578,9 +575,7 @@ class FluxKontextRoPEInputsStep(ModularPipelineBlocks):
 
         prompt_embeds = block_state.prompt_embeds
         dtype = prompt_embeds.dtype
-        block_state.txt_ids = mint.zeros((prompt_embeds.shape[1], 3)).to(
-            dtype=prompt_embeds.dtype
-        )
+        block_state.txt_ids = mint.zeros((prompt_embeds.shape[1], 3)).to(dtype=prompt_embeds.dtype)
 
         img_ids = None
         if (
