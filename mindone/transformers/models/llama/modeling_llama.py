@@ -373,7 +373,7 @@ class LlamaPreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_sdpa = False  # SDPA, not support yet
     _supports_flex_attn = False  # FlexAttention, not support yet
-    _supports_cache_class = True  # set it True if use DynamicCache
+    _supports_cache_class = True  # set it False if use static tuple cache
     _supports_quantized_cache = False
     _supports_static_cache = False  # StaticCache, not used
     _supports_attention_backend = True
@@ -604,6 +604,9 @@ class LlamaModel(LlamaPreTrainedModel):
             )
 
         hidden_states = self.norm(hidden_states)
+
+        if not return_dict:
+            return tuple(v for v in [hidden_states, past_key_values] if v is not None)
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
