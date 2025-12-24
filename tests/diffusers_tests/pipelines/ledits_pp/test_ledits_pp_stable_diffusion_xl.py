@@ -20,6 +20,7 @@ import random
 import unittest
 
 import numpy as np
+import pytest
 import torch
 from ddt import data, ddt, unpack
 from PIL import Image

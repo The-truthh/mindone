@@ -18,6 +18,7 @@
 
 import unittest
 
+import diffusers
 import numpy as np
 import pytest
 import torch

@@ -20,6 +20,8 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
+import mindspore as ms
+
 from ...models import UNet1DModel
 from ...schedulers import SchedulerMixin
 from ...utils import logging
