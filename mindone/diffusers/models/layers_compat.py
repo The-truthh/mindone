@@ -24,8 +24,6 @@ Key Features:
         - **unflatten**: Always custom due to framework limitations.
         [2025/10/22]
         - **RMSNorm**: Always custom due to framework limitations.
-        [2025/10/28]
-        - **scaled_dot_product_attention**
         [2025/11/12]
         - **scaled_dot_product_attention**: Always custom due to framework limitations.
         - **DeviceMesh**: Always custom due to framework limitations.
