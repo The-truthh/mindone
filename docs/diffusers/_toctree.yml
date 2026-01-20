@@ -255,6 +255,8 @@
         title: BriaTransformer2DModel
       - local: api/models/chroma_transformer
         title: ChromaTransformer2DModel
+      - local: api/models/chronoedit_transformer_3d
+        title: ChronoEditTransformer3DModel
       - local: api/models/cogvideox_transformer3d
         title: CogVideoXTransformer3DModel
       - local: api/models/cogview3plus_transformer2d
@@ -289,6 +291,8 @@
         title: MochiTransformer3DModel
       - local: api/models/omnigen_transformer
         title: OmniGenTransformer2DModel
+      - local: api/models/ovisimage_transformer2d
+        title: OvisImageTransformer2DModel
       - local: api/models/pixart_transformer2d
         title: PixArtTransformer2DModel
       - local: api/models/prior_transformer
@@ -309,6 +313,8 @@
         title: TransformerTemporalModel
       - local: api/models/wan_transformer_3d
         title: WanTransformer3DModel
+      - local: api/models/z_image_transformer2d
+        title: ZImageTransformer2DModel
     - title: UNets
       sections:
       - local: api/models/stable_cascade_unet
@@ -389,6 +395,8 @@
       title: Bria 3.2
     - local: api/pipelines/chroma
       title: Chroma
+    - local: api/pipelines/chronoedit
+      title: ChronoEdit
     - local: api/pipelines/cogvideox
       title: CogVideoX
     - local: api/pipelines/cogview3
@@ -483,6 +491,8 @@
       title: MusicLDM
     - local: api/pipelines/omnigen
       title: OmniGen
+    - local: api/pipelines/ovis_image
+      title: Ovis-Image
     - local: api/pipelines/pag
       title: PAG
     - local: api/pipelines/paint_by_example
@@ -567,6 +577,8 @@
       title: Wan
     - local: api/pipelines/wuerstchen
       title: Wuerstchen
+    - local: api/pipelines/z_image
+      title: Z-Image
   - title: Schedulers
     sections:
     - local: api/schedulers/overview

@@ -1623,6 +1623,77 @@ CHROMA_TRANSFORMER2D_CASES = [
 ]
 
 
+ZIMAGE_TRANSFORMER2D_CASES = [
+    [
+        "ZImageTransformer2DModel",
+        "diffusers.models.transformers.transformer_z_image.ZImageTransformer2DModel",
+        "mindone.diffusers.models.transformers.transformer_z_image.ZImageTransformer2DModel",
+        (),
+        {
+            "all_patch_size": (2,),
+            "all_f_patch_size": (1,),
+            "in_channels": 16,
+            "dim": 16,
+            "n_layers": 1,
+            "n_refiner_layers": 1,
+            "n_heads": 1,
+            "n_kv_heads": 2,
+            "qk_norm": True,
+            "cap_feat_dim": 16,
+            "rope_theta": 256.0,
+            "t_scale": 1000.0,
+            "axes_dims": [8, 4, 4],
+            "axes_lens": [256, 32, 32],
+        },
+        (),
+        {
+            "x": [np.random.randn(16, 1, 16, 16) for _ in range(1)],
+            "cap_feats": [np.random.randn(16, 16) for _ in range(1)],
+            "t": np.zeros(1),
+            "return_dict": False,
+        },
+    ]
+]
+
+
+HunyuanVideo15_Transformer3D_CASES = [
+    [
+        "HunyuanVideo15Transformer3DModel",
+        "diffusers.models.transformers.transformer_hunyuan_video15.HunyuanVideo15Transformer3DModel",
+        "mindone.diffusers.models.transformers.transformer_hunyuan_video15.HunyuanVideo15Transformer3DModel",
+        (),
+        {
+            "in_channels": 4,
+            "out_channels": 4,
+            "num_attention_heads": 2,
+            "attention_head_dim": 8,
+            "num_layers": 2,
+            "num_refiner_layers": 1,
+            "mlp_ratio": 2.0,
+            "patch_size": 1,
+            "patch_size_t": 1,
+            "text_embed_dim": 16,
+            "text_embed_2_dim": 8,
+            "image_embed_dim": 12,
+            "rope_axes_dim": (2, 2, 4),
+            "target_size": 16,
+            "task_type": "t2v",
+        },
+        (),
+        {
+            "hidden_states": np.random.randn(1, 4, 1, 8, 8),
+            "timestep": np.ones(1),
+            "encoder_hidden_states": np.random.randn(1, 6, 16),
+            "encoder_attention_mask": np.ones((1, 6)),
+            "encoder_hidden_states_2": np.random.randn(1, 4, 8),
+            "encoder_attention_mask_2": np.ones((1, 4)),
+            "image_embeds": np.zeros((1, 3, 12)),
+            "return_dict": False,
+        },
+    ]
+]
+
+
 TRANSFORMERS_CASES = (
     ALLEGRO_TRANSFORMER3D_CASES
     + AURAFLOW_TRANSFORMER2D_CASES
@@ -1651,6 +1722,8 @@ TRANSFORMERS_CASES = (
     + LUMINA_NEXTDIT2D_CASES
     + LUMINA2_TRANSFORMER2D_CASES
     + CHROMA_TRANSFORMER2D_CASES
+    + ZIMAGE_TRANSFORMER2D_CASES
+    + HunyuanVideo15_Transformer3D_CASES
 )
 
 

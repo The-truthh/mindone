@@ -31,6 +31,7 @@ _import_structure = {
     "blip_diffusion": ["BlipDiffusionPipeline"],
     "bria": ["BriaPipeline"],
     "chroma": ["ChromaPipeline", "ChromaImg2ImgPipeline"],
+    "chronoedit": ["ChronoEditPipeline"],
     "cogvideo": [
         "CogVideoXPipeline",
         "CogVideoXImageToVideoPipeline",
@@ -110,6 +111,7 @@ _import_structure = {
         "HunyuanVideoImageToVideoPipeline",
         "HunyuanVideoFramepackPipeline",
     ],
+    "hunyuan_video1_5": ["HunyuanVideo15Pipeline", "HunyuanVideo15ImageToVideoPipeline"],
     "i2vgen_xl": ["I2VGenXLPipeline"],
     "latent_diffusion": ["LDMSuperResolutionPipeline", "LDMTextToImagePipeline"],
     "ledits_pp": ["LEditsPPPipelineStableDiffusion", "LEditsPPPipelineStableDiffusionXL"],
@@ -160,6 +162,7 @@ _import_structure = {
     "mochi": ["MochiPipeline"],
     "musicldm": ["MusicLDMPipeline"],
     "omnigen": ["OmniGenPipeline"],
+    "ovis_image": ["OvisImagePipeline"],
     "visualcloze": ["VisualClozePipeline", "VisualClozeGenerationPipeline"],
     "pag": [
         "StableDiffusionControlNetPAGInpaintPipeline",
@@ -271,6 +274,7 @@ _import_structure = {
         "SkyReelsV2ImageToVideoPipeline",
         "SkyReelsV2Pipeline",
     ],
+    "z_image": ["ZImageImg2ImgPipeline", "ZImagePipeline"],
     "pipeline_utils": [
         "AudioPipelineOutput",
         "DiffusionPipeline",
@@ -297,6 +301,7 @@ if TYPE_CHECKING:
     from .blip_diffusion import BlipDiffusionPipeline
     from .bria import BriaPipeline
     from .chroma import ChromaImg2ImgPipeline, ChromaPipeline
+    from .chronoedit import ChronoEditPipeline
     from .cogvideo import (
         CogVideoXFunControlPipeline,
         CogVideoXImageToVideoPipeline,
@@ -364,6 +369,7 @@ if TYPE_CHECKING:
         HunyuanVideoImageToVideoPipeline,
         HunyuanVideoPipeline,
     )
+    from .hunyuan_video1_5 import HunyuanVideo15ImageToVideoPipeline, HunyuanVideo15Pipeline
     from .hunyuandit import HunyuanDiTPipeline
     from .i2vgen_xl import I2VGenXLPipeline
     from .kandinsky import (
@@ -407,6 +413,7 @@ if TYPE_CHECKING:
     from .mochi import MochiPipeline
     from .musicldm import MusicLDMPipeline
     from .omnigen import OmniGenPipeline
+    from .ovis_image import OvisImagePipeline
     from .pag import (
         AnimateDiffPAGPipeline,
         HunyuanDiTPAGPipeline,
@@ -494,6 +501,7 @@ if TYPE_CHECKING:
     from .visualcloze import VisualClozeGenerationPipeline, VisualClozePipeline
     from .wan import WanImageToVideoPipeline, WanPipeline, WanVACEPipeline, WanVideoToVideoPipeline
     from .wuerstchen import WuerstchenCombinedPipeline, WuerstchenDecoderPipeline, WuerstchenPriorPipeline
+    from .z_image import ZImageImg2ImgPipeline, ZImagePipeline
 else:
     import sys
 

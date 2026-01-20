@@ -80,8 +80,8 @@ _import_structure = {
         "HiDreamImageLoraLoaderMixin",
         "SkyReelsV2LoraLoaderMixin",
         "QwenImageLoraLoaderMixin",
-        # "ZImageLoraLoaderMixin",
         # "Flux2LoraLoaderMixin",
+        "ZImageLoraLoaderMixin",
     ],
     "peft": ["PeftAdapterMixin"],
     "single_file": ["FromSingleFileMixin"],
@@ -112,6 +112,7 @@ if TYPE_CHECKING:
         StableDiffusionLoraLoaderMixin,
         StableDiffusionXLLoraLoaderMixin,
         WanLoraLoaderMixin,
+        ZImageLoraLoaderMixin,
     )
     from .peft import PeftAdapterMixin
     from .single_file import FromSingleFileMixin

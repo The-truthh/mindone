@@ -1238,6 +1238,7 @@ from .models.qwen2_5_vl import (
     Qwen2_5_VLModel,
     Qwen2_5_VLPreTrainedModel,
     Qwen2_5_VLProcessor,
+    Qwen2_5_VLTextModel,
 )
 from .models.qwen2_audio import (
     Qwen2AudioEncoder,

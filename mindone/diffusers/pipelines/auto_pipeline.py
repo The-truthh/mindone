@@ -106,6 +106,7 @@ from .stable_diffusion_xl import (
 )
 from .wan import WanImageToVideoPipeline, WanPipeline, WanVideoToVideoPipeline
 from .wuerstchen import WuerstchenCombinedPipeline, WuerstchenDecoderPipeline
+from .z_image import ZImageImg2ImgPipeline, ZImagePipeline
 
 AUTO_TEXT2IMAGE_PIPELINES_MAPPING = OrderedDict(
     [
@@ -146,6 +147,7 @@ AUTO_TEXT2IMAGE_PIPELINES_MAPPING = OrderedDict(
         ("cogview3", CogView3PlusPipeline),
         ("cogview4", CogView4Pipeline),
         ("cogview4-control", CogView4ControlPipeline),
+        ("z-image", ZImagePipeline),
     ]
 )
 
@@ -170,6 +172,7 @@ AUTO_IMAGE2IMAGE_PIPELINES_MAPPING = OrderedDict(
         ("flux-controlnet", FluxControlNetImg2ImgPipeline),
         ("flux-control", FluxControlImg2ImgPipeline),
         ("flux-kontext", FluxKontextPipeline),
+        ("z-image", ZImageImg2ImgPipeline),
     ]
 )
 
