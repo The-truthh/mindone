@@ -1,8 +1,5 @@
 # Copyright 2020 The HuggingFace Team. All rights reserved.
 #
-# This code is adapted from https://github.com/huggingface/transformers
-# with modifications to run transformers on mindspore.
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -22,1762 +19,957 @@
 # in the namespace without actually importing anything (and especially none of the backends).
 
 __version__ = "4.57.1"
-import transformers
-from packaging import version
 
-from .cache_utils import (
-    Cache,
-    DynamicCache,
-    EncoderDecoderCache,
-    HybridCache,
-    MambaCache,
-    OffloadedStaticCache,
-    SlidingWindowCache,
-    StaticCache,
-)
-from .feature_extraction_sequence_utils import SequenceFeatureExtractor
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-# Feature Extractor
-from .feature_extraction_utils import BatchFeature, FeatureExtractionMixin
-from .generation import CompileConfig
-from .image_processing_base import ImageProcessingMixin
-from .image_processing_utils import BaseImageProcessor
-from .image_processing_utils_fast import BaseImageProcessorFast
-from .image_utils import ImageFeatureExtractionMixin
-from .masking_utils import AttentionMaskInterface
-from .modeling_utils import MSPreTrainedModel, PreTrainedModel
-from .models.aimv2 import Aimv2Model, Aimv2PreTrainedModel, Aimv2TextModel, Aimv2VisionModel
-from .models.albert import (
-    AlbertForMaskedLM,
-    AlbertForMultipleChoice,
-    AlbertForPreTraining,
-    AlbertForQuestionAnswering,
-    AlbertForSequenceClassification,
-    AlbertForTokenClassification,
-    AlbertModel,
-    AlbertPreTrainedModel,
+# Check the dependencies satisfy the minimal versions required.
+from . import dependency_versions_check
+from .utils import (
+    OptionalDependencyNotAvailable,
+    _LazyModule,
+    is_essentia_available,
+    is_g2p_en_available,
+    is_librosa_available,
+    is_mistral_common_available,
+    is_mlx_available,
+    is_pretty_midi_available,
 )
-from .models.align import AlignModel, AlignPreTrainedModel, AlignTextModel, AlignVisionModel
-from .models.altclip import AltCLIPModel, AltCLIPPreTrainedModel, AltCLIPTextModel, AltCLIPVisionModel
-from .models.apertus import ApertusForCausalLM, ApertusForTokenClassification, ApertusModel, ApertusPreTrainedModel
-from .models.arcee import *
-from .models.aria import (
-    AriaForConditionalGeneration,
-    AriaPreTrainedModel,
-    AriaTextForCausalLM,
-    AriaTextModel,
-    AriaTextPreTrainedModel,
-)
-from .models.audio_spectrogram_transformer import (
-    ASTFeatureExtractor,
-    ASTForAudioClassification,
-    ASTModel,
-    ASTPreTrainedModel,
-)
-from .models.auto import (
-    MODEL_FOR_AUDIO_CLASSIFICATION_MAPPING,
-    MODEL_FOR_AUDIO_FRAME_CLASSIFICATION_MAPPING,
-    MODEL_FOR_AUDIO_XVECTOR_MAPPING,
-    MODEL_FOR_BACKBONE_MAPPING,
-    MODEL_FOR_CAUSAL_IMAGE_MODELING_MAPPING,
-    MODEL_FOR_CAUSAL_LM_MAPPING,
-    MODEL_FOR_CTC_MAPPING,
-    MODEL_FOR_DEPTH_ESTIMATION_MAPPING,
-    MODEL_FOR_DOCUMENT_QUESTION_ANSWERING_MAPPING,
-    MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
-    MODEL_FOR_IMAGE_MAPPING,
-    MODEL_FOR_IMAGE_SEGMENTATION_MAPPING,
-    MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING,
-    MODEL_FOR_IMAGE_TO_IMAGE_MAPPING,
-    MODEL_FOR_INSTANCE_SEGMENTATION_MAPPING,
-    MODEL_FOR_KEYPOINT_DETECTION_MAPPING,
-    MODEL_FOR_MASK_GENERATION_MAPPING,
-    MODEL_FOR_MASKED_IMAGE_MODELING_MAPPING,
-    MODEL_FOR_MASKED_LM_MAPPING,
-    MODEL_FOR_MULTIPLE_CHOICE_MAPPING,
-    MODEL_FOR_NEXT_SENTENCE_PREDICTION_MAPPING,
-    MODEL_FOR_OBJECT_DETECTION_MAPPING,
-    MODEL_FOR_PRETRAINING_MAPPING,
-    MODEL_FOR_QUESTION_ANSWERING_MAPPING,
-    MODEL_FOR_RETRIEVAL_MAPPING,
-    MODEL_FOR_SEMANTIC_SEGMENTATION_MAPPING,
-    MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
-    MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING,
-    MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING,
-    MODEL_FOR_TABLE_QUESTION_ANSWERING_MAPPING,
-    MODEL_FOR_TEXT_ENCODING_MAPPING,
-    MODEL_FOR_TEXT_TO_SPECTROGRAM_MAPPING,
-    MODEL_FOR_TEXT_TO_WAVEFORM_MAPPING,
-    MODEL_FOR_TIME_SERIES_CLASSIFICATION_MAPPING,
-    MODEL_FOR_TIME_SERIES_REGRESSION_MAPPING,
-    MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING,
-    MODEL_FOR_UNIVERSAL_SEGMENTATION_MAPPING,
-    MODEL_FOR_VIDEO_CLASSIFICATION_MAPPING,
-    MODEL_FOR_VISION_2_SEQ_MAPPING,
-    MODEL_FOR_VISUAL_QUESTION_ANSWERING_MAPPING,
-    MODEL_FOR_ZERO_SHOT_IMAGE_CLASSIFICATION_MAPPING,
-    MODEL_FOR_ZERO_SHOT_OBJECT_DETECTION_MAPPING,
-    MODEL_MAPPING,
-    MODEL_WITH_LM_HEAD_MAPPING,
-    AutoBackbone,
-    AutoConfig,
-    AutoFeatureExtractor,
-    AutoImageProcessor,
-    AutoModel,
-    AutoModelForAudioClassification,
-    AutoModelForAudioFrameClassification,
-    AutoModelForAudioXVector,
-    AutoModelForCausalLM,
-    AutoModelForCTC,
-    AutoModelForDepthEstimation,
-    AutoModelForDocumentQuestionAnswering,
-    AutoModelForImageClassification,
-    AutoModelForImageSegmentation,
-    AutoModelForImageTextToText,
-    AutoModelForImageToImage,
-    AutoModelForInstanceSegmentation,
-    AutoModelForKeypointDetection,
-    AutoModelForMaskedImageModeling,
-    AutoModelForMaskedLM,
-    AutoModelForMaskGeneration,
-    AutoModelForMultipleChoice,
-    AutoModelForNextSentencePrediction,
-    AutoModelForObjectDetection,
-    AutoModelForPreTraining,
-    AutoModelForQuestionAnswering,
-    AutoModelForSemanticSegmentation,
-    AutoModelForSeq2SeqLM,
-    AutoModelForSequenceClassification,
-    AutoModelForSpeechSeq2Seq,
-    AutoModelForTableQuestionAnswering,
-    AutoModelForTextEncoding,
-    AutoModelForTextToSpectrogram,
-    AutoModelForTextToWaveform,
-    AutoModelForTokenClassification,
-    AutoModelForUniversalSegmentation,
-    AutoModelForVideoClassification,
-    AutoModelForVision2Seq,
-    AutoModelForVisualQuestionAnswering,
-    AutoModelForZeroShotImageClassification,
-    AutoModelForZeroShotObjectDetection,
-    AutoModelWithLMHead,
-    AutoProcessor,
-    AutoVideoProcessor,
-)
-from .models.aya_vision import AyaVisionForConditionalGeneration, AyaVisionPreTrainedModel
-from .models.bamba import BambaForCausalLM, BambaModel, BambaPreTrainedModel
-from .models.bark import BarkCausalModel, BarkCoarseModel, BarkFineModel, BarkModel, BarkSemanticModel
-from .models.bart import (
-    BartForCausalLM,
-    BartForConditionalGeneration,
-    BartForQuestionAnswering,
-    BartForSequenceClassification,
-    BartModel,
-    BartPretrainedModel,
-    BartPreTrainedModel,
-    PretrainedBartModel,
-)
-from .models.beit import (
-    BeitBackbone,
-    BeitForImageClassification,
-    BeitForMaskedImageModeling,
-    BeitForSemanticSegmentation,
-    BeitModel,
-    BeitPreTrainedModel,
-)
-from .models.bert import (
-    BertForMaskedLM,
-    BertForMultipleChoice,
-    BertForNextSentencePrediction,
-    BertForPreTraining,
-    BertForQuestionAnswering,
-    BertForSequenceClassification,
-    BertForTokenClassification,
-    BertLayer,
-    BertLMHeadModel,
-    BertModel,
-    BertPreTrainedModel,
-)
-from .models.bert_generation import BertGenerationDecoder, BertGenerationEncoder, BertGenerationPreTrainedModel
-from .models.big_bird import (
-    BigBirdForCausalLM,
-    BigBirdForMaskedLM,
-    BigBirdForMultipleChoice,
-    BigBirdForPreTraining,
-    BigBirdForQuestionAnswering,
-    BigBirdForSequenceClassification,
-    BigBirdForTokenClassification,
-    BigBirdLayer,
-    BigBirdModel,
-    BigBirdPreTrainedModel,
-)
-from .models.bigbird_pegasus import (
-    BigBirdPegasusForCausalLM,
-    BigBirdPegasusForConditionalGeneration,
-    BigBirdPegasusForQuestionAnswering,
-    BigBirdPegasusForSequenceClassification,
-    BigBirdPegasusModel,
-    BigBirdPegasusPreTrainedModel,
-)
-from .models.biogpt import (
-    BioGptForCausalLM,
-    BioGptForSequenceClassification,
-    BioGptForTokenClassification,
-    BioGptModel,
-    BioGptPreTrainedModel,
-)
-from .models.bit import BitBackbone
-from .models.blenderbot import (
-    BlenderbotForCausalLM,
-    BlenderbotForConditionalGeneration,
-    BlenderbotModel,
-    BlenderbotPreTrainedModel,
-)
-from .models.blenderbot_small import (
-    BlenderbotSmallForCausalLM,
-    BlenderbotSmallForConditionalGeneration,
-    BlenderbotSmallModel,
-    BlenderbotSmallPreTrainedModel,
-)
-from .models.blip import (
-    BlipForConditionalGeneration,
-    BlipForImageTextRetrieval,
-    BlipForQuestionAnswering,
-    BlipImageProcessor,
-    BlipImageProcessorFast,
-    BlipModel,
-    BlipPreTrainedModel,
-    BlipProcessor,
-    BlipTextModel,
-    BlipVisionModel,
-)
-from .models.blip_2 import (
-    Blip2ForConditionalGeneration,
-    Blip2Model,
-    Blip2PreTrainedModel,
-    Blip2QFormerModel,
-    Blip2VisionModel,
-)
-from .models.bloom import (
-    BloomForCausalLM,
-    BloomForQuestionAnswering,
-    BloomForSequenceClassification,
-    BloomForTokenClassification,
-    BloomModel,
-    BloomPreTrainedModel,
-)
-from .models.blt import BltForCausalLM, BltModel, BltPatcher, BltPreTrainedModel
-from .models.bridgetower import (
-    BridgeTowerForContrastiveLearning,
-    BridgeTowerForImageAndTextRetrieval,
-    BridgeTowerForMaskedLM,
-    BridgeTowerModel,
-    BridgeTowerPreTrainedModel,
-)
-from .models.bros import (
-    BrosForTokenClassification,
-    BrosModel,
-    BrosPreTrainedModel,
-    BrosSpadeEEForTokenClassification,
-    BrosSpadeELForTokenClassification,
-)
-from .models.camembert import (
-    CamembertForCausalLM,
-    CamembertForMaskedLM,
-    CamembertForMultipleChoice,
-    CamembertForQuestionAnswering,
-    CamembertForSequenceClassification,
-    CamembertForTokenClassification,
-    CamembertModel,
-    CamembertPreTrainedModel,
-)
-from .models.canine import (
-    CanineForMultipleChoice,
-    CanineForQuestionAnswering,
-    CanineForSequenceClassification,
-    CanineForTokenClassification,
-    CanineLayer,
-    CanineModel,
-    CaninePreTrainedModel,
-)
-from .models.chameleon import (
-    ChameleonForConditionalGeneration,
-    ChameleonImageProcessor,
-    ChameleonModel,
-    ChameleonPreTrainedModel,
-    ChameleonProcessor,
-    ChameleonVQVAE,
-)
-from .models.chinese_clip import (
-    ChineseCLIPFeatureExtractor,
-    ChineseCLIPImageProcessor,
-    ChineseCLIPModel,
-    ChineseCLIPPreTrainedModel,
-    ChineseCLIPProcessor,
-    ChineseCLIPTextModel,
-    ChineseCLIPVisionModel,
-)
-from .models.clap import (
-    ClapAudioModel,
-    ClapAudioModelWithProjection,
-    ClapFeatureExtractor,
-    ClapModel,
-    ClapPreTrainedModel,
-    ClapTextModel,
-    ClapTextModelWithProjection,
-)
-from .models.clip import (
-    CLIP_PRETRAINED_MODEL_ARCHIVE_LIST,
-    CLIPModel,
-    CLIPPreTrainedModel,
-    CLIPTextModel,
-    CLIPTextModelWithProjection,
-    CLIPVisionModel,
-    CLIPVisionModelWithProjection,
-)
-from .models.clipseg import (
-    CLIPSegForImageSegmentation,
-    CLIPSegModel,
-    CLIPSegPreTrainedModel,
-    CLIPSegTextModel,
-    CLIPSegVisionModel,
-)
-from .models.clvp import (
-    ClvpDecoder,
-    ClvpEncoder,
-    ClvpForCausalLM,
-    ClvpModel,
-    ClvpModelForConditionalGeneration,
-    ClvpPreTrainedModel,
-)
-from .models.codegen import CodeGenForCausalLM, CodeGenModel, CodeGenPreTrainedModel
-from .models.cohere import CohereForCausalLM, CohereModel, CoherePreTrainedModel
-from .models.cohere2 import Cohere2ForCausalLM, Cohere2Model, Cohere2PreTrainedModel
-from .models.colpali import ColPaliForRetrieval, ColPaliPreTrainedModel, ColPaliProcessor
-from .models.colqwen2 import ColQwen2ForRetrieval, ColQwen2PreTrainedModel, ColQwen2Processor
-from .models.convbert import (
-    ConvBertForMaskedLM,
-    ConvBertForMultipleChoice,
-    ConvBertForQuestionAnswering,
-    ConvBertForSequenceClassification,
-    ConvBertForTokenClassification,
-    ConvBertLayer,
-    ConvBertModel,
-)
-from .models.convnext import (
-    ConvNextBackbone,
-    ConvNextFeatureExtractor,
-    ConvNextForImageClassification,
-    ConvNextImageProcessor,
-    ConvNextModel,
-    ConvNextPreTrainedModel,
-)
-from .models.convnextv2 import (
-    ConvNextV2Backbone,
-    ConvNextV2ForImageClassification,
-    ConvNextV2Model,
-    ConvNextV2PreTrainedModel,
-)
-from .models.csm import (
-    CsmBackboneModel,
-    CsmDepthDecoderForCausalLM,
-    CsmDepthDecoderModel,
-    CsmForConditionalGeneration,
-    CsmPreTrainedModel,
-)
-from .models.ctrl import CTRLForSequenceClassification, CTRLLMHeadModel, CTRLModel, CTRLPreTrainedModel
-from .models.cvt import CvtForImageClassification, CvtModel, CvtPreTrainedModel
-from .models.d_fine import DFineForObjectDetection, DFineModel, DFinePreTrainedModel
-from .models.dac import DacModel, DacPreTrainedModel
-from .models.data2vec import (
-    Data2VecAudioForAudioFrameClassification,
-    Data2VecAudioForCTC,
-    Data2VecAudioForSequenceClassification,
-    Data2VecAudioForXVector,
-    Data2VecAudioModel,
-    Data2VecAudioPreTrainedModel,
-    Data2VecTextForCausalLM,
-    Data2VecTextForMaskedLM,
-    Data2VecTextForMultipleChoice,
-    Data2VecTextForQuestionAnswering,
-    Data2VecTextForSequenceClassification,
-    Data2VecTextForTokenClassification,
-    Data2VecTextModel,
-    Data2VecTextPreTrainedModel,
-    Data2VecVisionForImageClassification,
-    Data2VecVisionForSemanticSegmentation,
-    Data2VecVisionModel,
-    Data2VecVisionPreTrainedModel,
-)
-from .models.dbrx import DbrxForCausalLM, DbrxModel, DbrxPreTrainedModel
-from .models.deberta import (
-    DebertaForMaskedLM,
-    DebertaForQuestionAnswering,
-    DebertaForSequenceClassification,
-    DebertaForTokenClassification,
-    DebertaModel,
-    DebertaPreTrainedModel,
-)
-from .models.deberta_v2 import (
-    DebertaV2ForMaskedLM,
-    DebertaV2ForMultipleChoice,
-    DebertaV2ForQuestionAnswering,
-    DebertaV2ForSequenceClassification,
-    DebertaV2ForTokenClassification,
-    DebertaV2Model,
-    DebertaV2PreTrainedModel,
-)
-from .models.deepseek_v2 import (
-    DeepseekV2ForCausalLM,
-    DeepseekV2ForSequenceClassification,
-    DeepseekV2Model,
-    DeepseekV2PreTrainedModel,
-)
-from .models.deepseek_vl import (
-    DeepseekVLForConditionalGeneration,
-    DeepseekVLModel,
-    DeepseekVLPreTrainedModel,
-    DeepseekVLProcessor,
-)
-from .models.deepseek_vl_hybrid import (
-    DeepseekVLHybridForConditionalGeneration,
-    DeepseekVLHybridModel,
-    DeepseekVLHybridPreTrainedModel,
-    DeepseekVLHybridProcessor,
-)
-from .models.deit import (
-    DeiTForImageClassification,
-    DeiTForImageClassificationWithTeacher,
-    DeiTForMaskedImageModeling,
-    DeiTModel,
-    DeiTPreTrainedModel,
-)
-from .models.deprecated.xlm_prophetnet import (
-    XLMProphetNetDecoder,
-    XLMProphetNetEncoder,
-    XLMProphetNetForCausalLM,
-    XLMProphetNetForConditionalGeneration,
-    XLMProphetNetModel,
-    XLMProphetNetPreTrainedModel,
-)
-from .models.depth_anything import DepthAnythingForDepthEstimation, DepthAnythingPreTrainedModel
-from .models.depth_pro import DepthProForDepthEstimation, DepthProImageProcessor, DepthProModel, DepthProPreTrainedModel
-from .models.dia import DiaForConditionalGeneration, DiaModel, DiaPreTrainedModel, DiaProcessor
-from .models.diffllama import (
-    DiffLlamaForCausalLM,
-    DiffLlamaForQuestionAnswering,
-    DiffLlamaForSequenceClassification,
-    DiffLlamaForTokenClassification,
-    DiffLlamaModel,
-    DiffLlamaPreTrainedModel,
-)
-from .models.dinov2 import Dinov2Backbone, Dinov2ForImageClassification, Dinov2Model, Dinov2PreTrainedModel
-from .models.dinov2_with_registers import (
-    Dinov2WithRegistersBackbone,
-    Dinov2WithRegistersForImageClassification,
-    Dinov2WithRegistersModel,
-    Dinov2WithRegistersPreTrainedModel,
-)
-from .models.dinov3_convnext import DINOv3ConvNextModel, DINOv3ConvNextPreTrainedModel
-from .models.dinov3_vit import DINOv3ViTImageProcessorFast, DINOv3ViTModel, DINOv3ViTPreTrainedModel
-from .models.distilbert import (
-    DistilBertForMaskedLM,
-    DistilBertForMultipleChoice,
-    DistilBertForQuestionAnswering,
-    DistilBertForSequenceClassification,
-    DistilBertForTokenClassification,
-    DistilBertModel,
-    DistilBertPreTrainedModel,
-)
-from .models.doge import DogeForCausalLM, DogeForSequenceClassification, DogeModel, DogePreTrainedModel
-from .models.dots1 import Dots1ForCausalLM, Dots1Model, Dots1PreTrainedModel
-from .models.dpr import (
-    DPRContextEncoder,
-    DPRPretrainedContextEncoder,
-    DPRPreTrainedModel,
-    DPRPretrainedQuestionEncoder,
-    DPRPretrainedReader,
-    DPRQuestionEncoder,
-    DPRReader,
-)
-from .models.dpt import DPTForDepthEstimation, DPTImageProcessor, DPTModel, DPTPreTrainedModel
-from .models.efficientloftr import (
-    EfficientLoFTRForKeypointMatching,
-    EfficientLoFTRImageProcessor,
-    EfficientLoFTRModel,
-    EfficientLoFTRPreTrainedModel,
-)
-from .models.efficientnet import (
-    EfficientNetForImageClassification,
-    EfficientNetImageProcessor,
-    EfficientNetModel,
-    EfficientNetPreTrainedModel,
-)
-from .models.electra import (
-    ElectraForCausalLM,
-    ElectraForMaskedLM,
-    ElectraForMultipleChoice,
-    ElectraForPreTraining,
-    ElectraForQuestionAnswering,
-    ElectraForSequenceClassification,
-    ElectraForTokenClassification,
-    ElectraModel,
-    ElectraPreTrainedModel,
-)
-from .models.emu3 import Emu3ForCausalLM, Emu3ForConditionalGeneration, Emu3PreTrainedModel, Emu3TextModel, Emu3VQVAE
-from .models.encodec import EncodecModel, EncodecPreTrainedModel
-from .models.encoder_decoder import EncoderDecoderModel
-from .models.eomt import EomtForUniversalSegmentation, EomtImageProcessor, EomtImageProcessorFast, EomtPreTrainedModel
-from .models.ernie import (
-    ErnieForCausalLM,
-    ErnieForMaskedLM,
-    ErnieForMultipleChoice,
-    ErnieForNextSentencePrediction,
-    ErnieForPreTraining,
-    ErnieForQuestionAnswering,
-    ErnieForSequenceClassification,
-    ErnieForTokenClassification,
-    ErnieModel,
-    ErniePreTrainedModel,
-)
-from .models.ernie4_5 import Ernie4_5ForCausalLM, Ernie4_5Model, Ernie4_5PreTrainedModel
-from .models.ernie4_5_moe import Ernie4_5_MoeForCausalLM, Ernie4_5_MoeModel, Ernie4_5_MoePreTrainedModel
-from .models.esm import (
-    EsmForMaskedLM,
-    EsmForSequenceClassification,
-    EsmForTokenClassification,
-    EsmModel,
-    EsmPreTrainedModel,
-)
-from .models.evolla import EvollaForProteinText2Text, EvollaModel, EvollaPreTrainedModel, EvollaProcessor
-from .models.exaone4 import (
-    Exaone4ForCausalLM,
-    Exaone4ForQuestionAnswering,
-    Exaone4ForSequenceClassification,
-    Exaone4ForTokenClassification,
-    Exaone4Model,
-    Exaone4PreTrainedModel,
-)
-from .models.falcon import (
-    FalconForCausalLM,
-    FalconForQuestionAnswering,
-    FalconForSequenceClassification,
-    FalconForTokenClassification,
-    FalconModel,
-    FalconPreTrainedModel,
-)
-from .models.falcon_h1 import FalconH1ForCausalLM, FalconH1Model, FalconH1PreTrainedModel
-from .models.falcon_mamba import FalconMambaForCausalLM, FalconMambaModel, FalconMambaPreTrainedModel
-from .models.fastspeech2_conformer import (
-    FastSpeech2ConformerHifiGan,
-    FastSpeech2ConformerModel,
-    FastSpeech2ConformerPreTrainedModel,
-    FastSpeech2ConformerWithHifiGan,
-)
-from .models.flaubert import (
-    FlaubertForMultipleChoice,
-    FlaubertForQuestionAnswering,
-    FlaubertForQuestionAnsweringSimple,
-    FlaubertForSequenceClassification,
-    FlaubertForTokenClassification,
-    FlaubertModel,
-    FlaubertPreTrainedModel,
-    FlaubertWithLMHeadModel,
-)
-from .models.flava import (
-    FlavaFeatureExtractor,
-    FlavaForPreTraining,
-    FlavaImageCodebook,
-    FlavaImageModel,
-    FlavaImageProcessor,
-    FlavaModel,
-    FlavaMultimodalModel,
-    FlavaPreTrainedModel,
-    FlavaProcessor,
-    FlavaTextModel,
-)
-from .models.flex_olmo import FlexOlmoForCausalLM, FlexOlmoModel, FlexOlmoPreTrainedModel
-from .models.florence2 import (
-    Florence2ForConditionalGeneration,
-    Florence2Model,
-    Florence2PreTrainedModel,
-    Florence2VisionBackbone,
-    Florence2VisionPreTrainedModel,
-)
-from .models.fnet import (
-    FNetForMaskedLM,
-    FNetForMultipleChoice,
-    FNetForNextSentencePrediction,
-    FNetForPreTraining,
-    FNetForQuestionAnswering,
-    FNetForSequenceClassification,
-    FNetForTokenClassification,
-    FNetLayer,
-    FNetModel,
-    FNetPreTrainedModel,
-)
-from .models.focalnet import (
-    FocalNetBackbone,
-    FocalNetForImageClassification,
-    FocalNetForMaskedImageModeling,
-    FocalNetModel,
-    FocalNetPreTrainedModel,
-)
-from .models.fsmt import FSMTForConditionalGeneration, FSMTModel, PretrainedFSMTModel
-from .models.funnel import (
-    FunnelBaseModel,
-    FunnelForMaskedLM,
-    FunnelForMultipleChoice,
-    FunnelForPreTraining,
-    FunnelForQuestionAnswering,
-    FunnelForSequenceClassification,
-    FunnelForTokenClassification,
-    FunnelModel,
-    FunnelPreTrainedModel,
-)
-from .models.fuyu import FuyuForCausalLM, FuyuPreTrainedModel
-from .models.gemma import (
-    GemmaForCausalLM,
-    GemmaForSequenceClassification,
-    GemmaForTokenClassification,
-    GemmaModel,
-    GemmaPreTrainedModel,
-)
-from .models.gemma2 import (
-    Gemma2ForCausalLM,
-    Gemma2ForSequenceClassification,
-    Gemma2ForTokenClassification,
-    Gemma2Model,
-    Gemma2PreTrainedModel,
-)
-from .models.gemma3 import Gemma3ForCausalLM, Gemma3ForConditionalGeneration, Gemma3PreTrainedModel, Gemma3TextModel
-from .models.git import GitForCausalLM, GitModel, GitPreTrainedModel, GitVisionModel
-from .models.glm import (
-    GlmForCausalLM,
-    GlmForSequenceClassification,
-    GlmForTokenClassification,
-    GlmModel,
-    GlmPreTrainedModel,
-)
-from .models.glm4_moe import Glm4MoeForCausalLM, Glm4MoeModel, Glm4MoePreTrainedModel
-from .models.glpn import (
-    GLPNFeatureExtractor,
-    GLPNForDepthEstimation,
-    GLPNImageProcessor,
-    GLPNModel,
-    GLPNPreTrainedModel,
-)
-from .models.got_ocr2 import (
-    GotOcr2ForConditionalGeneration,
-    GotOcr2ImageProcessor,
-    GotOcr2ImageProcessorFast,
-    GotOcr2PreTrainedModel,
-)
-from .models.gpt2 import (
-    GPT2DoubleHeadsModel,
-    GPT2ForQuestionAnswering,
-    GPT2ForSequenceClassification,
-    GPT2ForTokenClassification,
-    GPT2LMHeadModel,
-    GPT2Model,
-    GPT2PreTrainedModel,
-)
-from .models.gpt_bigcode import (
-    GPTBigCodeForCausalLM,
-    GPTBigCodeForSequenceClassification,
-    GPTBigCodeForTokenClassification,
-    GPTBigCodeModel,
-    GPTBigCodePreTrainedModel,
-)
-from .models.gpt_neo import (
-    GPTNeoForCausalLM,
-    GPTNeoForQuestionAnswering,
-    GPTNeoForSequenceClassification,
-    GPTNeoForTokenClassification,
-    GPTNeoModel,
-    GPTNeoPreTrainedModel,
-)
-from .models.gpt_neox import (
-    GPTNeoXForCausalLM,
-    GPTNeoXForQuestionAnswering,
-    GPTNeoXForSequenceClassification,
-    GPTNeoXForTokenClassification,
-    GPTNeoXLayer,
-    GPTNeoXModel,
-    GPTNeoXPreTrainedModel,
-)
-from .models.gpt_neox_japanese import (
-    GPTNeoXJapaneseForCausalLM,
-    GPTNeoXJapaneseLayer,
-    GPTNeoXJapaneseModel,
-    GPTNeoXJapanesePreTrainedModel,
-)
-from .models.gptj import (
-    GPTJForCausalLM,
-    GPTJForQuestionAnswering,
-    GPTJForSequenceClassification,
-    GPTJModel,
-    GPTJPreTrainedModel,
-)
-from .models.granite import GraniteForCausalLM, GraniteModel, GranitePreTrainedModel
-from .models.granite_speech import (
-    GraniteSpeechCTCEncoder,
-    GraniteSpeechFeatureExtractor,
-    GraniteSpeechForConditionalGeneration,
-    GraniteSpeechPreTrainedModel,
-    GraniteSpeechProcessor,
-)
-from .models.granitemoe import GraniteMoeForCausalLM, GraniteMoeModel, GraniteMoePreTrainedModel
-from .models.granitemoehybrid import GraniteMoeHybridForCausalLM, GraniteMoeHybridModel, GraniteMoeHybridPreTrainedModel
-from .models.granitemoeshared import GraniteMoeSharedForCausalLM, GraniteMoeSharedModel, GraniteMoeSharedPreTrainedModel
-from .models.grounding_dino import (
-    GroundingDinoForObjectDetection,
-    GroundingDinoImageProcessor,
-    GroundingDinoModel,
-    GroundingDinoPreTrainedModel,
-    GroundingDinoProcessor,
-)
-from .models.groupvit import GroupViTModel, GroupViTPreTrainedModel, GroupViTTextModel, GroupViTVisionModel
-from .models.helium import (
-    HeliumForCausalLM,
-    HeliumForSequenceClassification,
-    HeliumForTokenClassification,
-    HeliumModel,
-    HeliumPreTrainedModel,
-)
-from .models.hgnet_v2 import HGNetV2Backbone, HGNetV2ForImageClassification, HGNetV2PreTrainedModel
-from .models.hiera import (
-    HieraBackbone,
-    HieraForImageClassification,
-    HieraForPreTraining,
-    HieraModel,
-    HieraPreTrainedModel,
-)
-from .models.hubert import HubertForCTC, HubertForSequenceClassification, HubertModel, HubertPreTrainedModel
-from .models.ibert import (
-    IBertForMaskedLM,
-    IBertForMultipleChoice,
-    IBertForQuestionAnswering,
-    IBertForSequenceClassification,
-    IBertForTokenClassification,
-    IBertModel,
-    IBertPreTrainedModel,
-)
-from .models.idefics import (
-    IdeficsForVisionText2Text,
-    IdeficsImageProcessor,
-    IdeficsModel,
-    IdeficsPreTrainedModel,
-    IdeficsProcessor,
-)
-from .models.idefics2 import Idefics2ForConditionalGeneration, Idefics2Model, Idefics2PreTrainedModel
-from .models.idefics3 import (
-    Idefics3ForConditionalGeneration,
-    Idefics3Model,
-    Idefics3PreTrainedModel,
-    Idefics3VisionTransformer,
-)
-from .models.ijepa import IJepaForImageClassification, IJepaModel, IJepaPreTrainedModel
-from .models.imagegpt import (
-    ImageGPTFeatureExtractor,
-    ImageGPTForCausalImageModeling,
-    ImageGPTForImageClassification,
-    ImageGPTImageProcessor,
-    ImageGPTModel,
-    ImageGPTPreTrainedModel,
-)
-from .models.instructblip import (
-    InstructBlipForConditionalGeneration,
-    InstructBlipPreTrainedModel,
-    InstructBlipProcessor,
-    InstructBlipQFormerModel,
-    InstructBlipVisionModel,
-)
-from .models.instructblipvideo import (
-    InstructBlipVideoForConditionalGeneration,
-    InstructBlipVideoPreTrainedModel,
-    InstructBlipVideoQFormerModel,
-    InstructBlipVideoVisionModel,
-)
-from .models.internvl import (
-    InternVLForConditionalGeneration,
-    InternVLModel,
-    InternVLPreTrainedModel,
-    InternVLProcessor,
-    InternVLVideoProcessor,
-    InternVLVisionModel,
-    InternVLVisionPreTrainedModel,
-)
-from .models.jamba import JambaForCausalLM, JambaForSequenceClassification, JambaModel, JambaPreTrainedModel
-from .models.janus import JanusForConditionalGeneration, JanusModel, JanusPreTrainedModel, JanusVisionModel, JanusVQVAE
-from .models.jetmoe import (
-    JetMoeConfig,
-    JetMoeForCausalLM,
-    JetMoeForSequenceClassification,
-    JetMoeModel,
-    JetMoePreTrainedModel,
-)
-from .models.kosmos2 import Kosmos2ForConditionalGeneration, Kosmos2Model, Kosmos2PreTrainedModel
-from .models.kosmos2_5 import *
-from .models.kyutai_speech_to_text import (
-    KyutaiSpeechToTextForConditionalGeneration,
-    KyutaiSpeechToTextModel,
-    KyutaiSpeechToTextPreTrainedModel,
-)
-from .models.layoutlm import (
-    LayoutLMForMaskedLM,
-    LayoutLMForQuestionAnswering,
-    LayoutLMForSequenceClassification,
-    LayoutLMForTokenClassification,
-    LayoutLMModel,
-    LayoutLMPreTrainedModel,
-)
-from .models.layoutlmv3 import (
-    LayoutLMv3ForQuestionAnswering,
-    LayoutLMv3ForSequenceClassification,
-    LayoutLMv3ForTokenClassification,
-    LayoutLMv3ImageProcessor,
-    LayoutLMv3Model,
-    LayoutLMv3PreTrainedModel,
-    LayoutLMv3Processor,
-)
-from .models.led import (
-    LEDForConditionalGeneration,
-    LEDForQuestionAnswering,
-    LEDForSequenceClassification,
-    LEDModel,
-    LEDPreTrainedModel,
-)
-from .models.levit import (
-    LevitFeatureExtractor,
-    LevitForImageClassification,
-    LevitForImageClassificationWithTeacher,
-    LevitModel,
-    LevitPreTrainedModel,
-)
-from .models.lfm2 import *
-from .models.lfm2_vl import *
-from .models.lilt import (
-    LiltForQuestionAnswering,
-    LiltForSequenceClassification,
-    LiltForTokenClassification,
-    LiltModel,
-    LiltPreTrainedModel,
-)
-from .models.llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
-from .models.llama4 import *
-from .models.llava import LlavaConfig, LlavaForConditionalGeneration
-from .models.llava_next import (
-    LlavaNextForConditionalGeneration,
-    LlavaNextImageProcessor,
-    LlavaNextImageProcessorFast,
-    LlavaNextPreTrainedModel,
-    LlavaNextProcessor,
-)
-from .models.llava_next_video import (
-    LlavaNextVideoForConditionalGeneration,
-    LlavaNextVideoImageProcessor,
-    LlavaNextVideoPreTrainedModel,
-    LlavaNextVideoProcessor,
-    LlavaNextVideoVideoProcessor,
-)
-from .models.llava_onevision import (
-    LlavaOnevisionForConditionalGeneration,
-    LlavaOnevisionImageProcessor,
-    LlavaOnevisionPreTrainedModel,
-    LlavaOnevisionProcessor,
-    LlavaOnevisionVideoProcessor,
-)
-from .models.longformer import (
-    LongformerForMaskedLM,
-    LongformerForMultipleChoice,
-    LongformerForQuestionAnswering,
-    LongformerForSequenceClassification,
-    LongformerForTokenClassification,
-    LongformerModel,
-    LongformerPreTrainedModel,
-)
-from .models.longt5 import LongT5EncoderModel, LongT5ForConditionalGeneration, LongT5Model, LongT5PreTrainedModel
-from .models.luke import (
-    LukeForEntityClassification,
-    LukeForEntityPairClassification,
-    LukeForEntitySpanClassification,
-    LukeForMaskedLM,
-    LukeForMultipleChoice,
-    LukeForQuestionAnswering,
-    LukeForSequenceClassification,
-    LukeForTokenClassification,
-    LukeModel,
-    LukePreTrainedModel,
-)
-from .models.m2m_100 import M2M100ForConditionalGeneration, M2M100Model, M2M100PreTrainedModel
-from .models.mamba import MambaForCausalLM, MambaModel, MambaPreTrainedModel
-from .models.mamba2 import Mamba2ForCausalLM, Mamba2Model, Mamba2PreTrainedModel
-from .models.marian import MarianForCausalLM, MarianModel, MarianMTModel, MarianPreTrainedModel
-from .models.markuplm import (
-    MarkupLMForQuestionAnswering,
-    MarkupLMForSequenceClassification,
-    MarkupLMForTokenClassification,
-    MarkupLMModel,
-    MarkupLMPreTrainedModel,
-)
-from .models.mask2former import Mask2FormerForUniversalSegmentation, Mask2FormerModel, Mask2FormerPreTrainedModel
-from .models.maskformer import (
-    MaskFormerForInstanceSegmentation,
-    MaskFormerImageProcessor,
-    MaskFormerModel,
-    MaskFormerPreTrainedModel,
-    MaskFormerSwinBackbone,
-)
-from .models.mbart import (
-    MBartForCausalLM,
-    MBartForConditionalGeneration,
-    MBartForQuestionAnswering,
-    MBartForSequenceClassification,
-    MBartModel,
-    MBartPreTrainedModel,
-)
-from .models.megatron_bert import (
-    MegatronBertForCausalLM,
-    MegatronBertForMaskedLM,
-    MegatronBertForMultipleChoice,
-    MegatronBertForNextSentencePrediction,
-    MegatronBertForPreTraining,
-    MegatronBertForQuestionAnswering,
-    MegatronBertForSequenceClassification,
-    MegatronBertForTokenClassification,
-    MegatronBertModel,
-    MegatronBertPreTrainedModel,
-)
-from .models.metaclip_2 import *
-from .models.mgp_str import MgpstrForSceneTextRecognition, MgpstrModel, MgpstrPreTrainedModel, MgpstrProcessor
-from .models.mimi import MimiModel, MimiPreTrainedModel
-from .models.minicpm4 import MiniCPMForCausalLM, MiniCPMForSequenceClassification, MiniCPMModel
-from .models.minicpmv_4_5 import MiniCPMVImageProcessor, MiniCPMVProcessor, MiniCPMVTokenizerFast
-from .models.ministral import (
-    MinistralForCausalLM,
-    MinistralForQuestionAnswering,
-    MinistralForSequenceClassification,
-    MinistralForTokenClassification,
-    MinistralModel,
-    MinistralPreTrainedModel,
-)
-from .models.mistral import (
-    MistralForCausalLM,
-    MistralForQuestionAnswering,
-    MistralForSequenceClassification,
-    MistralForTokenClassification,
-    MistralModel,
-    MistralPreTrainedModel,
-)
-from .models.mistral3 import Mistral3ForConditionalGeneration, Mistral3PreTrainedModel
-from .models.mixtral import (
-    MixtralForCausalLM,
-    MixtralForQuestionAnswering,
-    MixtralForSequenceClassification,
-    MixtralForTokenClassification,
-    MixtralModel,
-    MixtralPreTrainedModel,
-)
-from .models.mlcd import MLCDPreTrainedModel, MLCDVisionModel
-from .models.mllama import (
-    MllamaForCausalLM,
-    MllamaForConditionalGeneration,
-    MllamaPreTrainedModel,
-    MllamaTextModel,
-    MllamaVisionModel,
-)
-from .models.mm_grounding_dino import (
-    MMGroundingDinoForObjectDetection,
-    MMGroundingDinoModel,
-    MMGroundingDinoPreTrainedModel,
-)
-from .models.mobilebert import (
-    MobileBertForMaskedLM,
-    MobileBertForMultipleChoice,
-    MobileBertForNextSentencePrediction,
-    MobileBertForPreTraining,
-    MobileBertForQuestionAnswering,
-    MobileBertForSequenceClassification,
-    MobileBertForTokenClassification,
-    MobileBertLayer,
-    MobileBertModel,
-    MobileBertPreTrainedModel,
-)
-from .models.mobilenet_v1 import (
-    MobileNetV1ForImageClassification,
-    MobileNetV1ImageProcessor,
-    MobileNetV1ImageProcessorFast,
-    MobileNetV1Model,
-    MobileNetV1PreTrainedModel,
-)
-from .models.mobilenet_v2 import (
-    MobileNetV2ForImageClassification,
-    MobileNetV2ForSemanticSegmentation,
-    MobileNetV2ImageProcessor,
-    MobileNetV2ImageProcessorFast,
-    MobileNetV2Model,
-    MobileNetV2PreTrainedModel,
-)
-from .models.mobilevit import (
-    MobileViTForImageClassification,
-    MobileViTForSemanticSegmentation,
-    MobileViTModel,
-    MobileViTPreTrainedModel,
-)
-from .models.mobilevitv2 import (
-    MobileViTV2ForImageClassification,
-    MobileViTV2ForSemanticSegmentation,
-    MobileViTV2Model,
-    MobileViTV2PreTrainedModel,
-)
-from .models.modernbert import (
-    ModernBertForMaskedLM,
-    ModernBertForSequenceClassification,
-    ModernBertForTokenClassification,
-    ModernBertModel,
-    ModernBertPreTrainedModel,
-)
-from .models.modernbert_decoder import (
-    ModernBertDecoderForCausalLM,
-    ModernBertDecoderForSequenceClassification,
-    ModernBertDecoderModel,
-    ModernBertDecoderPreTrainedModel,
-)
-from .models.moonshine import MoonshineForConditionalGeneration, MoonshineModel, MoonshinePreTrainedModel
-from .models.moshi import MoshiForCausalLM, MoshiForConditionalGeneration, MoshiModel, MoshiPreTrainedModel
-from .models.mpnet import (
-    MPNetForMaskedLM,
-    MPNetForMultipleChoice,
-    MPNetForQuestionAnswering,
-    MPNetForSequenceClassification,
-    MPNetForTokenClassification,
-    MPNetLayer,
-    MPNetModel,
-    MPNetPreTrainedModel,
-)
-from .models.mpt import (
-    MptForCausalLM,
-    MptForQuestionAnswering,
-    MptForSequenceClassification,
-    MptForTokenClassification,
-    MptModel,
-    MptPreTrainedModel,
-)
-from .models.mra import (
-    MraForMaskedLM,
-    MraForMultipleChoice,
-    MraForQuestionAnswering,
-    MraForSequenceClassification,
-    MraForTokenClassification,
-    MraLayer,
-    MraModel,
-    MraPreTrainedModel,
-)
-from .models.mt5 import (
-    MT5_PRETRAINED_MODEL_ARCHIVE_LIST,
-    MT5EncoderModel,
-    MT5ForConditionalGeneration,
-    MT5Model,
-    MT5PreTrainedModel,
-)
-from .models.musicgen import (
-    MusicgenForCausalLM,
-    MusicgenForConditionalGeneration,
-    MusicgenModel,
-    MusicgenPreTrainedModel,
-)
-from .models.musicgen_melody import (
-    MusicgenMelodyForCausalLM,
-    MusicgenMelodyForConditionalGeneration,
-    MusicgenMelodyModel,
-    MusicgenMelodyPreTrainedModel,
-)
-from .models.mvp import (
-    MvpForCausalLM,
-    MvpForConditionalGeneration,
-    MvpForQuestionAnswering,
-    MvpForSequenceClassification,
-    MvpModel,
-    MvpPreTrainedModel,
-)
-from .models.nemotron import (
-    NemotronForCausalLM,
-    NemotronForQuestionAnswering,
-    NemotronForSequenceClassification,
-    NemotronForTokenClassification,
-    NemotronModel,
-    NemotronPreTrainedModel,
-)
-from .models.nllb_moe import (
-    NllbMoeForConditionalGeneration,
-    NllbMoeModel,
-    NllbMoePreTrainedModel,
-    NllbMoeSparseMLP,
-    NllbMoeTop2Router,
-)
-from .models.nystromformer import (
-    NystromformerEncoder,
-    NystromformerForMaskedLM,
-    NystromformerForMultipleChoice,
-    NystromformerForQuestionAnswering,
-    NystromformerForSequenceClassification,
-    NystromformerForTokenClassification,
-    NystromformerModel,
-    NystromformerPreTrainedModel,
-)
-from .models.olmo import OlmoForCausalLM, OlmoModel, OlmoPreTrainedModel
-from .models.olmo2 import Olmo2ForCausalLM, Olmo2Model, Olmo2PreTrainedModel
-from .models.olmo3 import Olmo3ForCausalLM, Olmo3Model, Olmo3PreTrainedModel
-from .models.olmoe import OlmoeForCausalLM, OlmoeModel, OlmoePreTrainedModel
-from .models.oneformer import (
-    OneFormerForUniversalSegmentation,
-    OneFormerImageProcessor,
-    OneFormerModel,
-    OneFormerPreTrainedModel,
-    OneFormerProcessor,
-)
-from .models.opt import (
-    OPTForCausalLM,
-    OPTForQuestionAnswering,
-    OPTForSequenceClassification,
-    OPTModel,
-    OPTPreTrainedModel,
-)
-from .models.ovis2 import Ovis2ForConditionalGeneration, Ovis2Model, Ovis2PreTrainedModel
-from .models.owlv2 import (
-    Owlv2ForObjectDetection,
-    Owlv2ImageProcessor,
-    Owlv2Model,
-    Owlv2PreTrainedModel,
-    Owlv2Processor,
-    Owlv2TextModel,
-    Owlv2VisionModel,
-)
-from .models.owlvit import (
-    OwlViTForObjectDetection,
-    OwlViTImageProcessor,
-    OwlViTModel,
-    OwlViTPreTrainedModel,
-    OwlViTProcessor,
-    OwlViTTextModel,
-    OwlViTVisionModel,
-)
-from .models.paligemma import PaliGemmaForConditionalGeneration, PaliGemmaPreTrainedModel
-from .models.parakeet import ParakeetEncoder, ParakeetForCTC, ParakeetPreTrainedModel
-from .models.pegasus import PegasusForCausalLM, PegasusForConditionalGeneration, PegasusModel, PegasusPreTrainedModel
-from .models.pegasus_x import PegasusXForConditionalGeneration, PegasusXModel, PegasusXPreTrainedModel
-from .models.perceiver import (
-    PerceiverForImageClassificationConvProcessing,
-    PerceiverForImageClassificationFourier,
-    PerceiverForImageClassificationLearned,
-    PerceiverForMaskedLM,
-    PerceiverForMultimodalAutoencoding,
-    PerceiverForOpticalFlow,
-    PerceiverForSequenceClassification,
-    PerceiverModel,
-    PerceiverPreTrainedModel,
-)
-from .models.persimmon import (
-    PersimmonForCausalLM,
-    PersimmonForSequenceClassification,
-    PersimmonForTokenClassification,
-    PersimmonModel,
-    PersimmonPreTrainedModel,
-)
-from .models.phi import (
-    PhiForCausalLM,
-    PhiForSequenceClassification,
-    PhiForTokenClassification,
-    PhiModel,
-    PhiPreTrainedModel,
-)
-from .models.phi3 import (
-    Phi3ForCausalLM,
-    Phi3ForSequenceClassification,
-    Phi3ForTokenClassification,
-    Phi3Model,
-    Phi3PreTrainedModel,
-)
-from .models.phi4_multimodal import (
-    Phi4MultimodalFeatureExtractor,
-    Phi4MultimodalImageProcessorFast,
-    Phi4MultimodalProcessor,
-)
-from .models.phimoe import PhimoeForCausalLM, PhimoeForSequenceClassification, PhimoeModel, PhimoePreTrainedModel
-from .models.pix2struct import (
-    Pix2StructForConditionalGeneration,
-    Pix2StructPreTrainedModel,
-    Pix2StructTextModel,
-    Pix2StructVisionModel,
-)
-from .models.pixtral import PixtralPreTrainedModel, PixtralVisionModel
-from .models.plbart import (
-    PLBartForCausalLM,
-    PLBartForConditionalGeneration,
-    PLBartForSequenceClassification,
-    PLBartModel,
-    PLBartPreTrainedModel,
-)
-from .models.poolformer import PoolFormerForImageClassification, PoolFormerModel, PoolFormerPreTrainedModel
-from .models.pop2piano import Pop2PianoForConditionalGeneration, Pop2PianoPreTrainedModel
-from .models.prompt_depth_anything import PromptDepthAnythingForDepthEstimation, PromptDepthAnythingPreTrainedModel
-from .models.prophetnet import (
-    ProphetNetDecoder,
-    ProphetNetEncoder,
-    ProphetNetForCausalLM,
-    ProphetNetForConditionalGeneration,
-    ProphetNetModel,
-    ProphetNetPreTrainedModel,
-)
-from .models.pvt import PvtForImageClassification, PvtModel, PvtPreTrainedModel
-from .models.pvt_v2 import PvtV2Backbone, PvtV2ForImageClassification, PvtV2Model, PvtV2PreTrainedModel
-from .models.qwen2 import Qwen2ForCausalLM, Qwen2ForSequenceClassification, Qwen2ForTokenClassification, Qwen2Model
-from .models.qwen2_5_vl import (
-    Qwen2_5_VLForConditionalGeneration,
-    Qwen2_5_VLModel,
-    Qwen2_5_VLPreTrainedModel,
-    Qwen2_5_VLProcessor,
-)
-from .models.qwen2_audio import (
-    Qwen2AudioEncoder,
-    Qwen2AudioForConditionalGeneration,
-    Qwen2AudioPreTrainedModel,
-    Qwen2AudioProcessor,
-)
-from .models.qwen2_moe import (
-    Qwen2MoeForCausalLM,
-    Qwen2MoeForQuestionAnswering,
-    Qwen2MoeForSequenceClassification,
-    Qwen2MoeForTokenClassification,
-    Qwen2MoeModel,
-    Qwen2MoePreTrainedModel,
-)
-from .models.qwen2_vl import (
-    Qwen2VLForConditionalGeneration,
-    Qwen2VLImageProcessor,
-    Qwen2VLImageProcessorFast,
-    Qwen2VLModel,
-    Qwen2VLPreTrainedModel,
-    Qwen2VLProcessor,
-    Qwen2VLVideoProcessor,
-)
-from .models.qwen3_next import (
-    Qwen3NextForCausalLM,
-    Qwen3NextForQuestionAnswering,
-    Qwen3NextForSequenceClassification,
-    Qwen3NextForTokenClassification,
-    Qwen3NextPreTrainedModel,
-)
-from .models.rag import RagModel, RagPreTrainedModel, RagSequenceForGeneration, RagTokenForGeneration
-from .models.recurrent_gemma import RecurrentGemmaForCausalLM, RecurrentGemmaModel, RecurrentGemmaPreTrainedModel
-from .models.reformer import (
-    ReformerAttention,
-    ReformerForMaskedLM,
-    ReformerForQuestionAnswering,
-    ReformerForSequenceClassification,
-    ReformerLayer,
-    ReformerModel,
-    ReformerModelWithLMHead,
-    ReformerPreTrainedModel,
-)
-from .models.regnet import RegNetForImageClassification, RegNetModel, RegNetPreTrainedModel
-from .models.rembert import (
-    RemBertForCausalLM,
-    RemBertForMaskedLM,
-    RemBertForMultipleChoice,
-    RemBertForQuestionAnswering,
-    RemBertForSequenceClassification,
-    RemBertForTokenClassification,
-    RemBertLayer,
-    RemBertModel,
-    RemBertPreTrainedModel,
-)
-from .models.resnet import ResNetBackbone, ResNetForImageClassification, ResNetModel, ResNetPreTrainedModel
-from .models.roberta import (
-    RobertaForCausalLM,
-    RobertaForMaskedLM,
-    RobertaForMultipleChoice,
-    RobertaForQuestionAnswering,
-    RobertaForSequenceClassification,
-    RobertaForTokenClassification,
-    RobertaModel,
-    RobertaPreTrainedModel,
-)
-from .models.roberta_prelayernorm import (
-    RobertaPreLayerNormForCausalLM,
-    RobertaPreLayerNormForMaskedLM,
-    RobertaPreLayerNormForMultipleChoice,
-    RobertaPreLayerNormForQuestionAnswering,
-    RobertaPreLayerNormForSequenceClassification,
-    RobertaPreLayerNormForTokenClassification,
-    RobertaPreLayerNormModel,
-    RobertaPreLayerNormPreTrainedModel,
-)
-from .models.roc_bert import (
-    RoCBertForCausalLM,
-    RoCBertForMaskedLM,
-    RoCBertForMultipleChoice,
-    RoCBertForPreTraining,
-    RoCBertForQuestionAnswering,
-    RoCBertForSequenceClassification,
-    RoCBertForTokenClassification,
-    RoCBertModel,
-    RoCBertPreTrainedModel,
-)
-from .models.roformer import (
-    RoFormerForCausalLM,
-    RoFormerForMaskedLM,
-    RoFormerForMultipleChoice,
-    RoFormerForQuestionAnswering,
-    RoFormerForSequenceClassification,
-    RoFormerForTokenClassification,
-    RoFormerLayer,
-    RoFormerModel,
-    RoFormerPreTrainedModel,
-)
-from .models.rt_detr import RTDetrForObjectDetection, RTDetrImageProcessor, RTDetrModel, RTDetrPreTrainedModel
-from .models.rt_detr_v2 import RTDetrV2ForObjectDetection, RTDetrV2Model, RTDetrV2PreTrainedModel
-from .models.rwkv import RwkvForCausalLM, RwkvModel, RwkvPreTrainedModel
-from .models.sam import SamImageProcessor, SamModel, SamPreTrainedModel, SamProcessor
-from .models.sam_hq import SamHQModel, SamHQPreTrainedModel, SamHQProcessor, SamHQVisionModel
-from .models.seamless_m4t import (
-    SeamlessM4TConfig,
-    SeamlessM4TFeatureExtractor,
-    SeamlessM4TForSpeechToSpeech,
-    SeamlessM4TForSpeechToText,
-    SeamlessM4TForTextToSpeech,
-    SeamlessM4TForTextToText,
-    SeamlessM4TModel,
-    SeamlessM4TProcessor,
-)
-from .models.seamless_m4t_v2 import (
-    SeamlessM4Tv2ForSpeechToSpeech,
-    SeamlessM4Tv2ForSpeechToText,
-    SeamlessM4Tv2ForTextToSpeech,
-    SeamlessM4Tv2ForTextToText,
-    SeamlessM4Tv2Model,
-    SeamlessM4Tv2PreTrainedModel,
-)
-from .models.seed_oss import (
-    SeedOssForCausalLM,
-    SeedOssForQuestionAnswering,
-    SeedOssForSequenceClassification,
-    SeedOssForTokenClassification,
-    SeedOssModel,
-    SeedOssPreTrainedModel,
-)
-from .models.segformer import (
-    SegformerDecodeHead,
-    SegformerForImageClassification,
-    SegformerForSemanticSegmentation,
-    SegformerImageProcessor,
-    SegformerModel,
-    SegformerPreTrainedModel,
-)
-from .models.seggpt import SegGptForImageSegmentation, SegGptModel, SegGptPreTrainedModel
-from .models.sew import SEWForCTC, SEWForSequenceClassification, SEWModel, SEWPreTrainedModel
-from .models.sew_d import SEWDForCTC, SEWDForSequenceClassification, SEWDModel, SEWDPreTrainedModel
-from .models.shieldgemma2 import ShieldGemma2ForImageClassification
-from .models.siglip import (
-    SiglipForImageClassification,
-    SiglipImageProcessor,
-    SiglipImageProcessorFast,
-    SiglipModel,
-    SiglipPreTrainedModel,
-    SiglipProcessor,
-    SiglipTextModel,
-    SiglipVisionModel,
-)
-from .models.siglip2 import (
-    Siglip2ForImageClassification,
-    Siglip2Model,
-    Siglip2PreTrainedModel,
-    Siglip2TextModel,
-    Siglip2VisionModel,
-)
-from .models.smollm3 import (
-    SmolLM3ForCausalLM,
-    SmolLM3ForQuestionAnswering,
-    SmolLM3ForSequenceClassification,
-    SmolLM3ForTokenClassification,
-)
-from .models.smolvlm import (
-    SmolVLMForConditionalGeneration,
-    SmolVLMModel,
-    SmolVLMPreTrainedModel,
-    SmolVLMVisionTransformer,
-)
-from .models.speech_encoder_decoder import SpeechEncoderDecoderModel
-from .models.speech_to_text import Speech2TextForConditionalGeneration, Speech2TextModel, Speech2TextPreTrainedModel
-from .models.speecht5 import (
-    SpeechT5ForSpeechToSpeech,
-    SpeechT5ForSpeechToText,
-    SpeechT5ForTextToSpeech,
-    SpeechT5HifiGan,
-    SpeechT5Model,
-    SpeechT5PreTrainedModel,
-)
-from .models.splinter import (
-    SplinterForPreTraining,
-    SplinterForQuestionAnswering,
-    SplinterLayer,
-    SplinterModel,
-    SplinterPreTrainedModel,
-)
-from .models.squeezebert import (
-    SqueezeBertForMaskedLM,
-    SqueezeBertForMultipleChoice,
-    SqueezeBertForQuestionAnswering,
-    SqueezeBertForSequenceClassification,
-    SqueezeBertForTokenClassification,
-    SqueezeBertModel,
-    SqueezeBertPreTrainedModel,
-)
-from .models.stablelm import (
-    StableLmForCausalLM,
-    StableLmForSequenceClassification,
-    StableLmForTokenClassification,
-    StableLmModel,
-    StableLmPreTrainedModel,
-)
-from .models.starcoder2 import (
-    Starcoder2ForCausalLM,
-    Starcoder2ForSequenceClassification,
-    Starcoder2ForTokenClassification,
-    Starcoder2Model,
-    Starcoder2PreTrainedModel,
-)
-from .models.swiftformer import SwiftFormerForImageClassification, SwiftFormerModel, SwiftFormerPreTrainedModel
-from .models.swin import (
-    SwinBackbone,
-    SwinForImageClassification,
-    SwinForMaskedImageModeling,
-    SwinModel,
-    SwinPreTrainedModel,
-)
-from .models.swin2sr import Swin2SRForImageSuperResolution, Swin2SRModel, Swin2SRPreTrainedModel
-from .models.swinv2 import (
-    Swinv2Backbone,
-    Swinv2ForImageClassification,
-    Swinv2ForMaskedImageModeling,
-    Swinv2Model,
-    Swinv2PreTrainedModel,
-)
-from .models.switch_transformers import (
-    SwitchTransformersEncoderModel,
-    SwitchTransformersForConditionalGeneration,
-    SwitchTransformersModel,
-    SwitchTransformersPreTrainedModel,
-    SwitchTransformersSparseMLP,
-    SwitchTransformersTop1Router,
-)
-from .models.t5 import (
-    T5_PRETRAINED_MODEL_ARCHIVE_LIST,
-    T5EncoderModel,
-    T5ForConditionalGeneration,
-    T5Model,
-    T5PreTrainedModel,
-)
-from .models.t5gemma import (
-    T5GemmaEncoder,
-    T5GemmaEncoderModel,
-    T5GemmaForConditionalGeneration,
-    T5GemmaForSequenceClassification,
-    T5GemmaForTokenClassification,
-    T5GemmaModel,
-    T5GemmaPreTrainedModel,
-)
-from .models.table_transformer import (
-    TableTransformerForObjectDetection,
-    TableTransformerModel,
-    TableTransformerPreTrainedModel,
-)
-from .models.tapas import (
-    TapasForMaskedLM,
-    TapasForQuestionAnswering,
-    TapasForSequenceClassification,
-    TapasModel,
-    TapasPreTrainedModel,
-)
-from .models.textnet import TextNetBackbone, TextNetForImageClassification, TextNetModel, TextNetPreTrainedModel
-from .models.timesfm import TimesFmModel, TimesFmModelForPrediction, TimesFmPreTrainedModel
-from .models.timesformer import TimesformerForVideoClassification, TimesformerModel, TimesformerPreTrainedModel
-from .models.trocr import TrOCRForCausalLM, TrOCRPreTrainedModel
-from .models.tvp import TvpForVideoGrounding, TvpModel, TvpPreTrainedModel
-from .models.udop import UdopEncoderModel, UdopForConditionalGeneration, UdopModel, UdopPreTrainedModel
-from .models.ultravox import UltravoxProcessor
-from .models.umt5 import (
-    UMT5EncoderModel,
-    UMT5ForQuestionAnswering,
-    UMT5ForSequenceClassification,
-    UMT5ForTokenClassification,
-    UMT5Model,
-    UMT5PreTrainedModel,
-)
-from .models.unispeech import (
-    UniSpeechForCTC,
-    UniSpeechForPreTraining,
-    UniSpeechForSequenceClassification,
-    UniSpeechModel,
-    UniSpeechPreTrainedModel,
-)
-from .models.unispeech_sat import (
-    UniSpeechSatForAudioFrameClassification,
-    UniSpeechSatForCTC,
-    UniSpeechSatForPreTraining,
-    UniSpeechSatForSequenceClassification,
-    UniSpeechSatForXVector,
-    UniSpeechSatModel,
-    UniSpeechSatPreTrainedModel,
-)
-from .models.univnet import UnivNetModel
-from .models.upernet import UperNetForSemanticSegmentation, UperNetPreTrainedModel
-from .models.vaultgemma import VaultGemmaForCausalLM, VaultGemmaModel, VaultGemmaPreTrainedModel
-from .models.video_llava import VideoLlavaForConditionalGeneration, VideoLlavaPreTrainedModel
-from .models.videomae import (
-    VideoMAEForPreTraining,
-    VideoMAEForVideoClassification,
-    VideoMAEImageProcessor,
-    VideoMAEModel,
-    VideoMAEPreTrainedModel,
-)
-from .models.vilt import (
-    ViltForImageAndTextRetrieval,
-    ViltForImagesAndTextClassification,
-    ViltForMaskedLM,
-    ViltForQuestionAnswering,
-    ViltForTokenClassification,
-    ViltModel,
-    ViltPreTrainedModel,
-)
-from .models.vipllava import VipLlavaForConditionalGeneration, VipLlavaPreTrainedModel
-from .models.vision_encoder_decoder import VisionEncoderDecoderModel
-from .models.vision_text_dual_encoder import VisionTextDualEncoderModel
-from .models.visual_bert import (
-    VisualBertForMultipleChoice,
-    VisualBertForPreTraining,
-    VisualBertForQuestionAnswering,
-    VisualBertForRegionToPhraseAlignment,
-    VisualBertForVisualReasoning,
-    VisualBertModel,
-    VisualBertPreTrainedModel,
-)
-from .models.vit import ViTForImageClassification, ViTForMaskedImageModeling, ViTModel, ViTPreTrainedModel
-from .models.vit_mae import ViTMAEForPreTraining, ViTMAEModel, ViTMAEPreTrainedModel
-from .models.vit_msn import ViTMSNForImageClassification, ViTMSNModel, ViTMSNPreTrainedModel
-from .models.vitdet import VitDetBackbone, VitDetModel, VitDetPreTrainedModel
-from .models.vitmatte import VitMatteForImageMatting, VitMattePreTrainedModel
-from .models.vitpose import VitPoseForPoseEstimation, VitPosePreTrainedModel
-from .models.vitpose_backbone import VitPoseBackbone, VitPoseBackbonePreTrainedModel
-from .models.vits import VitsModel, VitsPreTrainedModel
-from .models.vivit import VivitForVideoClassification, VivitModel, VivitPreTrainedModel
-from .models.voxtral import VoxtralEncoder, VoxtralForConditionalGeneration, VoxtralPreTrainedModel, VoxtralProcessor
-from .models.wav2vec2 import (
-    Wav2Vec2FeatureExtractor,
-    Wav2Vec2ForAudioFrameClassification,
-    Wav2Vec2ForCTC,
-    Wav2Vec2ForMaskedLM,
-    Wav2Vec2ForPreTraining,
-    Wav2Vec2ForSequenceClassification,
-    Wav2Vec2ForXVector,
-    Wav2Vec2Model,
-    Wav2Vec2PreTrainedModel,
-    Wav2Vec2Processor,
-)
-from .models.wav2vec2_bert import (
-    Wav2Vec2BertForAudioFrameClassification,
-    Wav2Vec2BertForCTC,
-    Wav2Vec2BertForSequenceClassification,
-    Wav2Vec2BertForXVector,
-    Wav2Vec2BertModel,
-    Wav2Vec2BertPreTrainedModel,
-)
-from .models.wav2vec2_conformer import (
-    Wav2Vec2ConformerForAudioFrameClassification,
-    Wav2Vec2ConformerForCTC,
-    Wav2Vec2ConformerForPreTraining,
-    Wav2Vec2ConformerForSequenceClassification,
-    Wav2Vec2ConformerForXVector,
-    Wav2Vec2ConformerModel,
-    Wav2Vec2ConformerPreTrainedModel,
-)
-from .models.wavlm import (
-    WavLMForAudioFrameClassification,
-    WavLMForCTC,
-    WavLMForSequenceClassification,
-    WavLMForXVector,
-    WavLMModel,
-    WavLMPreTrainedModel,
-)
-from .models.whisper import (
-    WhisperFeatureExtractor,
-    WhisperForAudioClassification,
-    WhisperForCausalLM,
-    WhisperForConditionalGeneration,
-    WhisperModel,
-    WhisperPreTrainedModel,
-    WhisperProcessor,
-)
-from .models.x_clip import XCLIPModel, XCLIPPreTrainedModel, XCLIPTextModel, XCLIPVisionModel
-from .models.xcodec import XcodecModel, XcodecPreTrainedModel
-from .models.xglm import XGLMForCausalLM, XGLMModel, XGLMPreTrainedModel
-from .models.xlm import (
-    XLMForMultipleChoice,
-    XLMForQuestionAnswering,
-    XLMForQuestionAnsweringSimple,
-    XLMForSequenceClassification,
-    XLMForTokenClassification,
-    XLMModel,
-    XLMPreTrainedModel,
-    XLMWithLMHeadModel,
-)
-from .models.xlm_roberta import (
-    XLMRobertaForCausalLM,
-    XLMRobertaForMaskedLM,
-    XLMRobertaForMultipleChoice,
-    XLMRobertaForQuestionAnswering,
-    XLMRobertaForSequenceClassification,
-    XLMRobertaForTokenClassification,
-    XLMRobertaModel,
-    XLMRobertaPreTrainedModel,
-)
-from .models.xlm_roberta_xl import (
-    XLMRobertaXLForCausalLM,
-    XLMRobertaXLForMaskedLM,
-    XLMRobertaXLForMultipleChoice,
-    XLMRobertaXLForQuestionAnswering,
-    XLMRobertaXLForSequenceClassification,
-    XLMRobertaXLForTokenClassification,
-    XLMRobertaXLModel,
-    XLMRobertaXLPreTrainedModel,
-)
-from .models.xlnet import (
-    XLNetForMultipleChoice,
-    XLNetForQuestionAnswering,
-    XLNetForQuestionAnsweringSimple,
-    XLNetForSequenceClassification,
-    XLNetForTokenClassification,
-    XLNetLMHeadModel,
-    XLNetModel,
-    XLNetPreTrainedModel,
-)
-from .models.xlstm import xLSTMForCausalLM, xLSTMModel, xLSTMPreTrainedModel
-from .models.xmod import (
-    XmodForCausalLM,
-    XmodForMaskedLM,
-    XmodForMultipleChoice,
-    XmodForQuestionAnswering,
-    XmodForSequenceClassification,
-    XmodForTokenClassification,
-    XmodModel,
-    XmodPreTrainedModel,
-)
-from .models.yolos import YolosForObjectDetection, YolosImageProcessor, YolosModel, YolosPreTrainedModel
-from .models.yoso import (
-    YosoForMaskedLM,
-    YosoForMultipleChoice,
-    YosoForQuestionAnswering,
-    YosoForSequenceClassification,
-    YosoForTokenClassification,
-    YosoLayer,
-    YosoModel,
-    YosoPreTrainedModel,
-)
-from .models.zamba import ZambaForCausalLM, ZambaForSequenceClassification, ZambaModel, ZambaPreTrainedModel
-from .models.zamba2 import Zamba2ForCausalLM, Zamba2ForSequenceClassification, Zamba2Model, Zamba2PreTrainedModel
-from .models.zoedepth import ZoeDepthForDepthEstimation, ZoeDepthPreTrainedModel
-from .pipelines import (
-    ImageToImagePipeline,
-    ImageToTextPipeline,
-    TextGenerationPipeline,
-    VisualQuestionAnsweringPipeline,
-    pipeline,
-)
-from .processing_utils import ProcessorMixin
-from .trainer import Trainer
-from .training_args import TrainingArguments
-from .utils import TensorType, logging
-from .video_processing_utils import BaseVideoProcessor
 
-if version.parse(transformers.__version__) >= version.parse("4.51.0"):
-    from .models.qwen3 import Qwen3ForCausalLM, Qwen3Model, Qwen3PreTrainedModel
-    from .models.qwen3_moe import (
-        Qwen3MoeForCausalLM,
-        Qwen3MoeForQuestionAnswering,
-        Qwen3MoeForSequenceClassification,
-        Qwen3MoeForTokenClassification,
-        Qwen3MoeModel,
-        Qwen3MoePreTrainedModel,
+# Note: the following symbols are deliberately exported with `as`
+# so that mypy, pylint or other static linters can recognize them,
+# given that they are not exported using `__all__` in this file.
+from .utils import is_bitsandbytes_available as is_bitsandbytes_available
+from .utils import is_flax_available as is_flax_available
+from .utils import is_keras_nlp_available as is_keras_nlp_available
+from .utils import is_scipy_available as is_scipy_available
+from .utils import is_sentencepiece_available as is_sentencepiece_available
+from .utils import is_speech_available as is_speech_available
+from .utils import is_tensorflow_text_available as is_tensorflow_text_available
+from .utils import is_tf_available as is_tf_available
+from .utils import is_timm_available as is_timm_available
+from .utils import is_tokenizers_available as is_tokenizers_available
+from .utils import is_torch_available as is_torch_available
+from .utils import is_torchaudio_available as is_torchaudio_available
+from .utils import is_torchvision_available as is_torchvision_available
+from .utils import is_vision_available as is_vision_available
+from .utils import logging as logging
+from .utils.import_utils import define_import_structure
+
+
+logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+# Base objects, independent of any specific backend
+_import_structure = {
+    "audio_utils": [],
+    "commands": [],
+    "configuration_utils": ["PretrainedConfig"],
+    "convert_graph_to_onnx": [],
+    "convert_slow_tokenizers_checkpoints_to_fast": [],
+    "convert_tf_hub_seq_to_seq_bert_to_pytorch": [],
+    "data": [
+        "DataProcessor",
+        "InputExample",
+        "InputFeatures",
+        "SingleSentenceClassificationProcessor",
+        "SquadExample",
+        "SquadFeatures",
+        "SquadV1Processor",
+        "SquadV2Processor",
+        "glue_compute_metrics",
+        "glue_convert_examples_to_features",
+        "glue_output_modes",
+        "glue_processors",
+        "glue_tasks_num_labels",
+        "squad_convert_examples_to_features",
+        "xnli_compute_metrics",
+        "xnli_output_modes",
+        "xnli_processors",
+        "xnli_tasks_num_labels",
+    ],
+    "data.data_collator": [
+        "DataCollator",
+        "DataCollatorForLanguageModeling",
+        "DataCollatorForMultipleChoice",
+        "DataCollatorForPermutationLanguageModeling",
+        "DataCollatorForSeq2Seq",
+        "DataCollatorForSOP",
+        "DataCollatorForTokenClassification",
+        "DataCollatorForWholeWordMask",
+        "DataCollatorWithFlattening",
+        "DataCollatorWithPadding",
+        "DefaultDataCollator",
+        "default_data_collator",
+    ],
+    "data.metrics": [],
+    "data.processors": [],
+    "debug_utils": [],
+    "dependency_versions_check": [],
+    "dependency_versions_table": [],
+    "dynamic_module_utils": [],
+    "feature_extraction_sequence_utils": ["SequenceFeatureExtractor"],
+    "feature_extraction_utils": ["BatchFeature", "FeatureExtractionMixin"],
+    "file_utils": [],
+    "generation": [
+        "AsyncTextIteratorStreamer",
+        "CompileConfig",
+        "GenerationConfig",
+        "TextIteratorStreamer",
+        "TextStreamer",
+        "WatermarkingConfig",
+    ],
+    "hf_argparser": ["HfArgumentParser"],
+    "hyperparameter_search": [],
+    "image_transforms": [],
+    "integrations": [
+        "is_clearml_available",
+        "is_comet_available",
+        "is_dvclive_available",
+        "is_neptune_available",
+        "is_optuna_available",
+        "is_ray_available",
+        "is_ray_tune_available",
+        "is_sigopt_available",
+        "is_swanlab_available",
+        "is_tensorboard_available",
+        "is_trackio_available",
+        "is_wandb_available",
+    ],
+    "loss": [],
+    "modelcard": ["ModelCard"],
+    # Losses
+    "modeling_tf_pytorch_utils": [
+        "convert_tf_weight_name_to_pt_weight_name",
+        "load_pytorch_checkpoint_in_tf2_model",
+        "load_pytorch_model_in_tf2_model",
+        "load_pytorch_weights_in_tf2_model",
+        "load_tf2_checkpoint_in_pytorch_model",
+        "load_tf2_model_in_pytorch_model",
+        "load_tf2_weights_in_pytorch_model",
+    ],
+    # Models
+    "onnx": [],
+    "pipelines": [
+        "AudioClassificationPipeline",
+        "AutomaticSpeechRecognitionPipeline",
+        "CsvPipelineDataFormat",
+        "DepthEstimationPipeline",
+        "DocumentQuestionAnsweringPipeline",
+        "FeatureExtractionPipeline",
+        "FillMaskPipeline",
+        "ImageClassificationPipeline",
+        "ImageFeatureExtractionPipeline",
+        "ImageSegmentationPipeline",
+        "ImageTextToTextPipeline",
+        "ImageToImagePipeline",
+        "ImageToTextPipeline",
+        "JsonPipelineDataFormat",
+        "KeypointMatchingPipeline",
+        "MaskGenerationPipeline",
+        "NerPipeline",
+        "ObjectDetectionPipeline",
+        "PipedPipelineDataFormat",
+        "Pipeline",
+        "PipelineDataFormat",
+        "QuestionAnsweringPipeline",
+        "SummarizationPipeline",
+        "TableQuestionAnsweringPipeline",
+        "Text2TextGenerationPipeline",
+        "TextClassificationPipeline",
+        "TextGenerationPipeline",
+        "TextToAudioPipeline",
+        "TokenClassificationPipeline",
+        "TranslationPipeline",
+        "VideoClassificationPipeline",
+        "VisualQuestionAnsweringPipeline",
+        "ZeroShotAudioClassificationPipeline",
+        "ZeroShotClassificationPipeline",
+        "ZeroShotImageClassificationPipeline",
+        "ZeroShotObjectDetectionPipeline",
+        "pipeline",
+    ],
+    "processing_utils": ["ProcessorMixin"],
+    "quantizers": [],
+    "testing_utils": [],
+    "tokenization_utils": ["PreTrainedTokenizer"],
+    "tokenization_utils_base": [
+        "AddedToken",
+        "BatchEncoding",
+        "CharSpan",
+        "PreTrainedTokenizerBase",
+        "SpecialTokensMixin",
+        "TokenSpan",
+    ],
+    "trainer_callback": [
+        "DefaultFlowCallback",
+        "EarlyStoppingCallback",
+        "PrinterCallback",
+        "ProgressCallback",
+        "TrainerCallback",
+        "TrainerControl",
+        "TrainerState",
+    ],
+    "trainer_utils": [
+        "EvalPrediction",
+        "IntervalStrategy",
+        "SchedulerType",
+        "enable_full_determinism",
+        "set_seed",
+    ],
+    "training_args": ["TrainingArguments"],
+    "training_args_seq2seq": ["Seq2SeqTrainingArguments"],
+    "training_args_tf": ["TFTrainingArguments"],
+    "utils": [
+        "CONFIG_NAME",
+        "MODEL_CARD_NAME",
+        "PYTORCH_PRETRAINED_BERT_CACHE",
+        "PYTORCH_TRANSFORMERS_CACHE",
+        "SPIECE_UNDERLINE",
+        "TF2_WEIGHTS_NAME",
+        "TF_WEIGHTS_NAME",
+        "TRANSFORMERS_CACHE",
+        "WEIGHTS_NAME",
+        "TensorType",
+        "add_end_docstrings",
+        "add_start_docstrings",
+        "is_apex_available",
+        "is_av_available",
+        "is_bitsandbytes_available",
+        "is_datasets_available",
+        "is_faiss_available",
+        "is_flax_available",
+        "is_keras_nlp_available",
+        "is_matplotlib_available",
+        "is_mlx_available",
+        "is_phonemizer_available",
+        "is_psutil_available",
+        "is_py3nvml_available",
+        "is_pyctcdecode_available",
+        "is_sacremoses_available",
+        "is_safetensors_available",
+        "is_scipy_available",
+        "is_sentencepiece_available",
+        "is_sklearn_available",
+        "is_speech_available",
+        "is_tensorflow_text_available",
+        "is_tf_available",
+        "is_timm_available",
+        "is_tokenizers_available",
+        "is_torch_available",
+        "is_torch_hpu_available",
+        "is_torch_mlu_available",
+        "is_torch_musa_available",
+        "is_torch_neuroncore_available",
+        "is_torch_npu_available",
+        "is_torchvision_available",
+        "is_torch_xla_available",
+        "is_torch_xpu_available",
+        "is_vision_available",
+        "logging",
+    ],
+    "utils.quantization_config": [
+        "AqlmConfig",
+        "AutoRoundConfig",
+        "AwqConfig",
+        "BitNetQuantConfig",
+        "BitsAndBytesConfig",
+        "CompressedTensorsConfig",
+        "EetqConfig",
+        "FbgemmFp8Config",
+        "FineGrainedFP8Config",
+        "GPTQConfig",
+        "HiggsConfig",
+        "HqqConfig",
+        "Mxfp4Config",
+        "QuantoConfig",
+        "QuarkConfig",
+        "FPQuantConfig",
+        "SpQRConfig",
+        "TorchAoConfig",
+        "VptqConfig",
+    ],
+    "video_utils": [],
+}
+
+# tokenizers-backed objects
+try:
+    if not is_tokenizers_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_tokenizers_objects
+
+    _import_structure["utils.dummy_tokenizers_objects"] = [
+        name for name in dir(dummy_tokenizers_objects) if not name.startswith("_")
+    ]
+else:
+    # Fast tokenizers structure
+    _import_structure["tokenization_utils_fast"] = ["PreTrainedTokenizerFast"]
+
+
+try:
+    if not (is_sentencepiece_available() and is_tokenizers_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_sentencepiece_and_tokenizers_objects
+
+    _import_structure["utils.dummy_sentencepiece_and_tokenizers_objects"] = [
+        name for name in dir(dummy_sentencepiece_and_tokenizers_objects) if not name.startswith("_")
+    ]
+else:
+    _import_structure["convert_slow_tokenizer"] = [
+        "SLOW_TO_FAST_CONVERTERS",
+        "convert_slow_tokenizer",
+    ]
+
+try:
+    if not (is_mistral_common_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_mistral_common_objects
+
+    _import_structure["utils.dummy_mistral_common_objects"] = [
+        name for name in dir(dummy_mistral_common_objects) if not name.startswith("_")
+    ]
+else:
+    _import_structure["tokenization_mistral_common"] = ["MistralCommonTokenizer"]
+
+# Vision-specific objects
+try:
+    if not is_vision_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_vision_objects
+
+    _import_structure["utils.dummy_vision_objects"] = [
+        name for name in dir(dummy_vision_objects) if not name.startswith("_")
+    ]
+else:
+    _import_structure["image_processing_base"] = ["ImageProcessingMixin"]
+    _import_structure["image_processing_utils"] = ["BaseImageProcessor"]
+    _import_structure["image_utils"] = ["ImageFeatureExtractionMixin"]
+
+try:
+    if not is_torchvision_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_torchvision_objects
+
+    _import_structure["utils.dummy_torchvision_objects"] = [
+        name for name in dir(dummy_torchvision_objects) if not name.startswith("_")
+    ]
+else:
+    _import_structure["image_processing_utils_fast"] = ["BaseImageProcessorFast"]
+    _import_structure["video_processing_utils"] = ["BaseVideoProcessor"]
+
+# PyTorch-backed objects
+try:
+    if not is_torch_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_pt_objects
+
+    _import_structure["utils.dummy_pt_objects"] = [name for name in dir(dummy_pt_objects) if not name.startswith("_")]
+else:
+    _import_structure["model_debugging_utils"] = [
+        "model_addition_debugger_context",
+    ]
+    _import_structure["activations"] = []
+    _import_structure["cache_utils"] = [
+        "CacheLayerMixin",
+        "DynamicLayer",
+        "StaticLayer",
+        "StaticSlidingWindowLayer",
+        "SlidingWindowLayer",
+        "ChunkedSlidingLayer",
+        "QuantoQuantizedLayer",
+        "HQQQuantizedLayer",
+        "Cache",
+        "DynamicCache",
+        "EncoderDecoderCache",
+        "HQQQuantizedCache",
+        "HybridCache",
+        "HybridChunkedCache",
+        "OffloadedCache",
+        "OffloadedStaticCache",
+        "QuantizedCache",
+        "QuantoQuantizedCache",
+        "SinkCache",
+        "SlidingWindowCache",
+        "StaticCache",
+    ]
+    _import_structure["data.datasets"] = [
+        "GlueDataset",
+        "GlueDataTrainingArguments",
+        "LineByLineTextDataset",
+        "LineByLineWithRefDataset",
+        "LineByLineWithSOPTextDataset",
+        "SquadDataset",
+        "SquadDataTrainingArguments",
+        "TextDataset",
+        "TextDatasetForNextSentencePrediction",
+    ]
+    _import_structure["generation"].extend(
+        [
+            "AlternatingCodebooksLogitsProcessor",
+            "BayesianDetectorConfig",
+            "BayesianDetectorModel",
+            "BeamScorer",
+            "ClassifierFreeGuidanceLogitsProcessor",
+            "ConstrainedBeamSearchScorer",
+            "Constraint",
+            "ConstraintListState",
+            "DisjunctiveConstraint",
+            "EncoderNoRepeatNGramLogitsProcessor",
+            "EncoderRepetitionPenaltyLogitsProcessor",
+            "EosTokenCriteria",
+            "EpsilonLogitsWarper",
+            "EtaLogitsWarper",
+            "ExponentialDecayLengthPenalty",
+            "ForcedBOSTokenLogitsProcessor",
+            "ForcedEOSTokenLogitsProcessor",
+            "GenerationMixin",
+            "InfNanRemoveLogitsProcessor",
+            "LogitNormalization",
+            "LogitsProcessor",
+            "LogitsProcessorList",
+            "MaxLengthCriteria",
+            "MaxTimeCriteria",
+            "MinLengthLogitsProcessor",
+            "MinNewTokensLengthLogitsProcessor",
+            "MinPLogitsWarper",
+            "NoBadWordsLogitsProcessor",
+            "NoRepeatNGramLogitsProcessor",
+            "PhrasalConstraint",
+            "PrefixConstrainedLogitsProcessor",
+            "RepetitionPenaltyLogitsProcessor",
+            "SequenceBiasLogitsProcessor",
+            "StoppingCriteria",
+            "StoppingCriteriaList",
+            "StopStringCriteria",
+            "SuppressTokensAtBeginLogitsProcessor",
+            "SuppressTokensLogitsProcessor",
+            "SynthIDTextWatermarkDetector",
+            "SynthIDTextWatermarkingConfig",
+            "SynthIDTextWatermarkLogitsProcessor",
+            "TemperatureLogitsWarper",
+            "TopKLogitsWarper",
+            "TopPLogitsWarper",
+            "TypicalLogitsWarper",
+            "UnbatchedClassifierFreeGuidanceLogitsProcessor",
+            "WatermarkDetector",
+            "WatermarkLogitsProcessor",
+            "WhisperTimeStampLogitsProcessor",
+        ]
     )
 
-if version.parse(transformers.__version__) >= version.parse("4.51.3"):
-    from .models.glm4 import (
-        Glm4ForCausalLM,
-        Glm4ForSequenceClassification,
-        Glm4ForTokenClassification,
-        Glm4Model,
-        Glm4PreTrainedModel,
+    # PyTorch domain libraries integration
+    _import_structure["integrations.executorch"] = [
+        "TorchExportableModuleWithStaticCache",
+        "convert_and_export_with_cache",
+    ]
+
+    _import_structure["modeling_flash_attention_utils"] = []
+    _import_structure["modeling_layers"] = ["GradientCheckpointingLayer"]
+    _import_structure["modeling_outputs"] = []
+    _import_structure["modeling_rope_utils"] = ["ROPE_INIT_FUNCTIONS", "dynamic_rope_update"]
+    _import_structure["modeling_utils"] = ["PreTrainedModel", "AttentionInterface"]
+    _import_structure["masking_utils"] = ["AttentionMaskInterface"]
+    _import_structure["optimization"] = [
+        "Adafactor",
+        "get_constant_schedule",
+        "get_constant_schedule_with_warmup",
+        "get_cosine_schedule_with_warmup",
+        "get_cosine_with_hard_restarts_schedule_with_warmup",
+        "get_cosine_with_min_lr_schedule_with_warmup",
+        "get_cosine_with_min_lr_schedule_with_warmup_lr_rate",
+        "get_inverse_sqrt_schedule",
+        "get_linear_schedule_with_warmup",
+        "get_polynomial_decay_schedule_with_warmup",
+        "get_scheduler",
+        "get_wsd_schedule",
+        "get_reduce_on_plateau_schedule",
+    ]
+    _import_structure["pytorch_utils"] = [
+        "Conv1D",
+        "apply_chunking_to_forward",
+        "prune_layer",
+        "infer_device",
+    ]
+    _import_structure["sagemaker"] = []
+    _import_structure["time_series_utils"] = []
+    _import_structure["trainer"] = ["Trainer"]
+    _import_structure["trainer_pt_utils"] = ["torch_distributed_zero_first"]
+    _import_structure["trainer_seq2seq"] = ["Seq2SeqTrainer"]
+
+# TensorFlow-backed objects
+try:
+    if not is_tf_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_tf_objects
+
+    _import_structure["utils.dummy_tf_objects"] = [name for name in dir(dummy_tf_objects) if not name.startswith("_")]
+else:
+    _import_structure["activations_tf"] = []
+    _import_structure["generation"].extend(
+        [
+            "TFForcedBOSTokenLogitsProcessor",
+            "TFForcedEOSTokenLogitsProcessor",
+            "TFForceTokensLogitsProcessor",
+            "TFGenerationMixin",
+            "TFLogitsProcessor",
+            "TFLogitsProcessorList",
+            "TFLogitsWarper",
+            "TFMinLengthLogitsProcessor",
+            "TFNoBadWordsLogitsProcessor",
+            "TFNoRepeatNGramLogitsProcessor",
+            "TFRepetitionPenaltyLogitsProcessor",
+            "TFSuppressTokensAtBeginLogitsProcessor",
+            "TFSuppressTokensLogitsProcessor",
+            "TFTemperatureLogitsWarper",
+            "TFTopKLogitsWarper",
+            "TFTopPLogitsWarper",
+        ]
+    )
+    _import_structure["keras_callbacks"] = ["KerasMetricCallback", "PushToHubCallback"]
+    _import_structure["modeling_tf_outputs"] = []
+    _import_structure["modeling_tf_utils"] = [
+        "TFPreTrainedModel",
+        "TFSequenceSummary",
+        "TFSharedEmbeddings",
+        "shape_list",
+    ]
+    _import_structure["optimization_tf"] = [
+        "AdamWeightDecay",
+        "GradientAccumulator",
+        "WarmUp",
+        "create_optimizer",
+    ]
+    _import_structure["tf_utils"] = []
+
+
+# FLAX-backed objects
+try:
+    if not is_flax_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_flax_objects
+
+    _import_structure["utils.dummy_flax_objects"] = [
+        name for name in dir(dummy_flax_objects) if not name.startswith("_")
+    ]
+else:
+    _import_structure["generation"].extend(
+        [
+            "FlaxForcedBOSTokenLogitsProcessor",
+            "FlaxForcedEOSTokenLogitsProcessor",
+            "FlaxForceTokensLogitsProcessor",
+            "FlaxGenerationMixin",
+            "FlaxLogitsProcessor",
+            "FlaxLogitsProcessorList",
+            "FlaxLogitsWarper",
+            "FlaxMinLengthLogitsProcessor",
+            "FlaxTemperatureLogitsWarper",
+            "FlaxSuppressTokensAtBeginLogitsProcessor",
+            "FlaxSuppressTokensLogitsProcessor",
+            "FlaxTopKLogitsWarper",
+            "FlaxTopPLogitsWarper",
+            "FlaxWhisperTimeStampLogitsProcessor",
+        ]
+    )
+    _import_structure["modeling_flax_outputs"] = []
+    _import_structure["modeling_flax_utils"] = ["FlaxPreTrainedModel"]
+
+# Direct imports for type-checking
+if TYPE_CHECKING:
+    # All modeling imports
+    from .cache_utils import Cache as Cache
+    from .cache_utils import ChunkedSlidingLayer as ChunkedSlidingLayer
+    from .cache_utils import DynamicCache as DynamicCache
+    from .cache_utils import DynamicLayer as DynamicLayer
+    from .cache_utils import EncoderDecoderCache as EncoderDecoderCache
+    from .cache_utils import HQQQuantizedCache as HQQQuantizedCache
+    from .cache_utils import HQQQuantizedLayer as HQQQuantizedLayer
+    from .cache_utils import HybridCache as HybridCache
+    from .cache_utils import OffloadedCache as OffloadedCache
+    from .cache_utils import OffloadedStaticCache as OffloadedStaticCache
+    from .cache_utils import QuantizedCache as QuantizedCache
+    from .cache_utils import QuantoQuantizedCache as QuantoQuantizedCache
+    from .cache_utils import QuantoQuantizedLayer as QuantoQuantizedLayer
+    from .cache_utils import SinkCache as SinkCache
+    from .cache_utils import SlidingWindowCache as SlidingWindowCache
+    from .cache_utils import SlidingWindowLayer as SlidingWindowLayer
+    from .cache_utils import StaticCache as StaticCache
+    from .cache_utils import StaticLayer as StaticLayer
+    from .cache_utils import StaticSlidingWindowLayer as StaticSlidingWindowLayer
+    from .configuration_utils import PretrainedConfig as PretrainedConfig
+    from .convert_slow_tokenizer import SLOW_TO_FAST_CONVERTERS as SLOW_TO_FAST_CONVERTERS
+    from .convert_slow_tokenizer import convert_slow_tokenizer as convert_slow_tokenizer
+
+    # Data
+    from .data import DataProcessor as DataProcessor
+    from .data import InputExample as InputExample
+    from .data import InputFeatures as InputFeatures
+    from .data import SingleSentenceClassificationProcessor as SingleSentenceClassificationProcessor
+    from .data import SquadExample as SquadExample
+    from .data import SquadFeatures as SquadFeatures
+    from .data import SquadV1Processor as SquadV1Processor
+    from .data import SquadV2Processor as SquadV2Processor
+    from .data import glue_compute_metrics as glue_compute_metrics
+    from .data import glue_convert_examples_to_features as glue_convert_examples_to_features
+    from .data import glue_output_modes as glue_output_modes
+    from .data import glue_processors as glue_processors
+    from .data import glue_tasks_num_labels as glue_tasks_num_labels
+    from .data import squad_convert_examples_to_features as squad_convert_examples_to_features
+    from .data import xnli_compute_metrics as xnli_compute_metrics
+    from .data import xnli_output_modes as xnli_output_modes
+    from .data import xnli_processors as xnli_processors
+    from .data import xnli_tasks_num_labels as xnli_tasks_num_labels
+    from .data.data_collator import DataCollator as DataCollator
+    from .data.data_collator import DataCollatorForLanguageModeling as DataCollatorForLanguageModeling
+    from .data.data_collator import DataCollatorForMultipleChoice as DataCollatorForMultipleChoice
+    from .data.data_collator import (
+        DataCollatorForPermutationLanguageModeling as DataCollatorForPermutationLanguageModeling,
+    )
+    from .data.data_collator import DataCollatorForSeq2Seq as DataCollatorForSeq2Seq
+    from .data.data_collator import DataCollatorForSOP as DataCollatorForSOP
+    from .data.data_collator import DataCollatorForTokenClassification as DataCollatorForTokenClassification
+    from .data.data_collator import DataCollatorForWholeWordMask as DataCollatorForWholeWordMask
+    from .data.data_collator import DataCollatorWithFlattening as DataCollatorWithFlattening
+    from .data.data_collator import DataCollatorWithPadding as DataCollatorWithPadding
+    from .data.data_collator import DefaultDataCollator as DefaultDataCollator
+    from .data.data_collator import default_data_collator as default_data_collator
+    from .data.datasets import GlueDataset as GlueDataset
+    from .data.datasets import GlueDataTrainingArguments as GlueDataTrainingArguments
+    from .data.datasets import LineByLineTextDataset as LineByLineTextDataset
+    from .data.datasets import LineByLineWithRefDataset as LineByLineWithRefDataset
+    from .data.datasets import LineByLineWithSOPTextDataset as LineByLineWithSOPTextDataset
+    from .data.datasets import SquadDataset as SquadDataset
+    from .data.datasets import SquadDataTrainingArguments as SquadDataTrainingArguments
+    from .data.datasets import TextDataset as TextDataset
+    from .data.datasets import TextDatasetForNextSentencePrediction as TextDatasetForNextSentencePrediction
+    from .feature_extraction_sequence_utils import SequenceFeatureExtractor as SequenceFeatureExtractor
+
+    # Feature Extractor
+    from .feature_extraction_utils import BatchFeature as BatchFeature
+    from .feature_extraction_utils import FeatureExtractionMixin as FeatureExtractionMixin
+
+    # Generation
+    from .generation import AlternatingCodebooksLogitsProcessor as AlternatingCodebooksLogitsProcessor
+    from .generation import AsyncTextIteratorStreamer as AsyncTextIteratorStreamer
+    from .generation import BayesianDetectorConfig as BayesianDetectorConfig
+    from .generation import BayesianDetectorModel as BayesianDetectorModel
+    from .generation import BeamScorer as BeamScorer
+    from .generation import ClassifierFreeGuidanceLogitsProcessor as ClassifierFreeGuidanceLogitsProcessor
+    from .generation import CompileConfig as CompileConfig
+    from .generation import ConstrainedBeamSearchScorer as ConstrainedBeamSearchScorer
+    from .generation import Constraint as Constraint
+    from .generation import ConstraintListState as ConstraintListState
+    from .generation import DisjunctiveConstraint as DisjunctiveConstraint
+    from .generation import EncoderNoRepeatNGramLogitsProcessor as EncoderNoRepeatNGramLogitsProcessor
+    from .generation import EncoderRepetitionPenaltyLogitsProcessor as EncoderRepetitionPenaltyLogitsProcessor
+    from .generation import EosTokenCriteria as EosTokenCriteria
+    from .generation import EpsilonLogitsWarper as EpsilonLogitsWarper
+    from .generation import EtaLogitsWarper as EtaLogitsWarper
+    from .generation import ExponentialDecayLengthPenalty as ExponentialDecayLengthPenalty
+    from .generation import FlaxForcedBOSTokenLogitsProcessor as FlaxForcedBOSTokenLogitsProcessor
+    from .generation import FlaxForcedEOSTokenLogitsProcessor as FlaxForcedEOSTokenLogitsProcessor
+    from .generation import FlaxForceTokensLogitsProcessor as FlaxForceTokensLogitsProcessor
+    from .generation import FlaxGenerationMixin as FlaxGenerationMixin
+    from .generation import FlaxLogitsProcessor as FlaxLogitsProcessor
+    from .generation import FlaxLogitsProcessorList as FlaxLogitsProcessorList
+    from .generation import FlaxLogitsWarper as FlaxLogitsWarper
+    from .generation import FlaxMinLengthLogitsProcessor as FlaxMinLengthLogitsProcessor
+    from .generation import FlaxSuppressTokensAtBeginLogitsProcessor as FlaxSuppressTokensAtBeginLogitsProcessor
+    from .generation import FlaxSuppressTokensLogitsProcessor as FlaxSuppressTokensLogitsProcessor
+    from .generation import FlaxTemperatureLogitsWarper as FlaxTemperatureLogitsWarper
+    from .generation import FlaxTopKLogitsWarper as FlaxTopKLogitsWarper
+    from .generation import FlaxTopPLogitsWarper as FlaxTopPLogitsWarper
+    from .generation import FlaxWhisperTimeStampLogitsProcessor as FlaxWhisperTimeStampLogitsProcessor
+    from .generation import ForcedBOSTokenLogitsProcessor as ForcedBOSTokenLogitsProcessor
+    from .generation import ForcedEOSTokenLogitsProcessor as ForcedEOSTokenLogitsProcessor
+    from .generation import GenerationConfig as GenerationConfig
+    from .generation import GenerationMixin as GenerationMixin
+    from .generation import InfNanRemoveLogitsProcessor as InfNanRemoveLogitsProcessor
+    from .generation import LogitNormalization as LogitNormalization
+    from .generation import LogitsProcessor as LogitsProcessor
+    from .generation import LogitsProcessorList as LogitsProcessorList
+    from .generation import MaxLengthCriteria as MaxLengthCriteria
+    from .generation import MaxTimeCriteria as MaxTimeCriteria
+    from .generation import MinLengthLogitsProcessor as MinLengthLogitsProcessor
+    from .generation import MinNewTokensLengthLogitsProcessor as MinNewTokensLengthLogitsProcessor
+    from .generation import MinPLogitsWarper as MinPLogitsWarper
+    from .generation import NoBadWordsLogitsProcessor as NoBadWordsLogitsProcessor
+    from .generation import NoRepeatNGramLogitsProcessor as NoRepeatNGramLogitsProcessor
+    from .generation import PhrasalConstraint as PhrasalConstraint
+    from .generation import PrefixConstrainedLogitsProcessor as PrefixConstrainedLogitsProcessor
+    from .generation import RepetitionPenaltyLogitsProcessor as RepetitionPenaltyLogitsProcessor
+    from .generation import SequenceBiasLogitsProcessor as SequenceBiasLogitsProcessor
+    from .generation import StoppingCriteria as StoppingCriteria
+    from .generation import StoppingCriteriaList as StoppingCriteriaList
+    from .generation import StopStringCriteria as StopStringCriteria
+    from .generation import SuppressTokensAtBeginLogitsProcessor as SuppressTokensAtBeginLogitsProcessor
+    from .generation import SuppressTokensLogitsProcessor as SuppressTokensLogitsProcessor
+    from .generation import SynthIDTextWatermarkDetector as SynthIDTextWatermarkDetector
+    from .generation import SynthIDTextWatermarkingConfig as SynthIDTextWatermarkingConfig
+    from .generation import SynthIDTextWatermarkLogitsProcessor as SynthIDTextWatermarkLogitsProcessor
+    from .generation import TemperatureLogitsWarper as TemperatureLogitsWarper
+    from .generation import TextIteratorStreamer as TextIteratorStreamer
+    from .generation import TextStreamer as TextStreamer
+    from .generation import TFForcedBOSTokenLogitsProcessor as TFForcedBOSTokenLogitsProcessor
+    from .generation import TFForcedEOSTokenLogitsProcessor as TFForcedEOSTokenLogitsProcessor
+    from .generation import TFForceTokensLogitsProcessor as TFForceTokensLogitsProcessor
+    from .generation import TFGenerationMixin as TFGenerationMixin
+    from .generation import TFLogitsProcessor as TFLogitsProcessor
+    from .generation import TFLogitsProcessorList as TFLogitsProcessorList
+    from .generation import TFLogitsWarper as TFLogitsWarper
+    from .generation import TFMinLengthLogitsProcessor as TFMinLengthLogitsProcessor
+    from .generation import TFNoBadWordsLogitsProcessor as TFNoBadWordsLogitsProcessor
+    from .generation import TFNoRepeatNGramLogitsProcessor as TFNoRepeatNGramLogitsProcessor
+    from .generation import TFRepetitionPenaltyLogitsProcessor as TFRepetitionPenaltyLogitsProcessor
+    from .generation import TFSuppressTokensAtBeginLogitsProcessor as TFSuppressTokensAtBeginLogitsProcessor
+    from .generation import TFSuppressTokensLogitsProcessor as TFSuppressTokensLogitsProcessor
+    from .generation import TFTemperatureLogitsWarper as TFTemperatureLogitsWarper
+    from .generation import TFTopKLogitsWarper as TFTopKLogitsWarper
+    from .generation import TFTopPLogitsWarper as TFTopPLogitsWarper
+    from .generation import TopKLogitsWarper as TopKLogitsWarper
+    from .generation import TopPLogitsWarper as TopPLogitsWarper
+    from .generation import TypicalLogitsWarper as TypicalLogitsWarper
+    from .generation import (
+        UnbatchedClassifierFreeGuidanceLogitsProcessor as UnbatchedClassifierFreeGuidanceLogitsProcessor,
+    )
+    from .generation import WatermarkDetector as WatermarkDetector
+    from .generation import WatermarkingConfig as WatermarkingConfig
+    from .generation import WatermarkLogitsProcessor as WatermarkLogitsProcessor
+    from .generation import WhisperTimeStampLogitsProcessor as WhisperTimeStampLogitsProcessor
+    from .hf_argparser import HfArgumentParser as HfArgumentParser
+    from .image_processing_base import ImageProcessingMixin as ImageProcessingMixin
+    from .image_processing_utils import BaseImageProcessor as BaseImageProcessor
+    from .image_processing_utils_fast import BaseImageProcessorFast as BaseImageProcessorFast
+    from .image_utils import ImageFeatureExtractionMixin as ImageFeatureExtractionMixin
+
+    # Integrations
+    from .integrations import is_clearml_available as is_clearml_available
+    from .integrations import is_comet_available as is_comet_available
+    from .integrations import is_dvclive_available as is_dvclive_available
+    from .integrations import is_neptune_available as is_neptune_available
+    from .integrations import is_optuna_available as is_optuna_available
+    from .integrations import is_ray_available as is_ray_available
+    from .integrations import is_ray_tune_available as is_ray_tune_available
+    from .integrations import is_sigopt_available as is_sigopt_available
+    from .integrations import is_swanlab_available as is_swanlab_available
+    from .integrations import is_tensorboard_available as is_tensorboard_available
+    from .integrations import is_trackio_available as is_trackio_available
+    from .integrations import is_wandb_available as is_wandb_available
+    from .integrations.executorch import TorchExportableModuleWithStaticCache as TorchExportableModuleWithStaticCache
+    from .integrations.executorch import convert_and_export_with_cache as convert_and_export_with_cache
+    from .keras_callbacks import KerasMetricCallback as KerasMetricCallback
+    from .keras_callbacks import PushToHubCallback as PushToHubCallback
+    from .masking_utils import AttentionMaskInterface as AttentionMaskInterface
+    from .model_debugging_utils import model_addition_debugger_context as model_addition_debugger_context
+
+    # Model Cards
+    from .modelcard import ModelCard as ModelCard
+    from .modeling_flax_utils import FlaxPreTrainedModel as FlaxPreTrainedModel
+    from .modeling_layers import GradientCheckpointingLayer as GradientCheckpointingLayer
+    from .modeling_rope_utils import ROPE_INIT_FUNCTIONS as ROPE_INIT_FUNCTIONS
+    from .modeling_rope_utils import dynamic_rope_update as dynamic_rope_update
+
+    # TF 2.0 <=> PyTorch conversion utilities
+    from .modeling_tf_pytorch_utils import (
+        convert_tf_weight_name_to_pt_weight_name as convert_tf_weight_name_to_pt_weight_name,
+    )
+    from .modeling_tf_pytorch_utils import load_pytorch_checkpoint_in_tf2_model as load_pytorch_checkpoint_in_tf2_model
+    from .modeling_tf_pytorch_utils import load_pytorch_model_in_tf2_model as load_pytorch_model_in_tf2_model
+    from .modeling_tf_pytorch_utils import load_pytorch_weights_in_tf2_model as load_pytorch_weights_in_tf2_model
+    from .modeling_tf_pytorch_utils import load_tf2_checkpoint_in_pytorch_model as load_tf2_checkpoint_in_pytorch_model
+    from .modeling_tf_pytorch_utils import load_tf2_model_in_pytorch_model as load_tf2_model_in_pytorch_model
+    from .modeling_tf_pytorch_utils import load_tf2_weights_in_pytorch_model as load_tf2_weights_in_pytorch_model
+    from .modeling_tf_utils import TFPreTrainedModel as TFPreTrainedModel
+    from .modeling_tf_utils import TFSequenceSummary as TFSequenceSummary
+    from .modeling_tf_utils import TFSharedEmbeddings as TFSharedEmbeddings
+    from .modeling_tf_utils import shape_list as shape_list
+    from .modeling_utils import AttentionInterface as AttentionInterface
+    from .modeling_utils import PreTrainedModel as PreTrainedModel
+    from .models import *
+    from .models.mamba.modeling_mamba import MambaCache as MambaCache
+    from .models.timm_wrapper import TimmWrapperImageProcessor as TimmWrapperImageProcessor
+
+    # Optimization
+    from .optimization import Adafactor as Adafactor
+    from .optimization import get_constant_schedule as get_constant_schedule
+    from .optimization import get_constant_schedule_with_warmup as get_constant_schedule_with_warmup
+    from .optimization import get_cosine_schedule_with_warmup as get_cosine_schedule_with_warmup
+    from .optimization import (
+        get_cosine_with_hard_restarts_schedule_with_warmup as get_cosine_with_hard_restarts_schedule_with_warmup,
+    )
+    from .optimization import (
+        get_cosine_with_min_lr_schedule_with_warmup as get_cosine_with_min_lr_schedule_with_warmup,
+    )
+    from .optimization import (
+        get_cosine_with_min_lr_schedule_with_warmup_lr_rate as get_cosine_with_min_lr_schedule_with_warmup_lr_rate,
+    )
+    from .optimization import get_inverse_sqrt_schedule as get_inverse_sqrt_schedule
+    from .optimization import get_linear_schedule_with_warmup as get_linear_schedule_with_warmup
+    from .optimization import get_polynomial_decay_schedule_with_warmup as get_polynomial_decay_schedule_with_warmup
+    from .optimization import get_scheduler as get_scheduler
+    from .optimization import get_wsd_schedule as get_wsd_schedule
+
+    # Optimization
+    from .optimization_tf import AdamWeightDecay as AdamWeightDecay
+    from .optimization_tf import GradientAccumulator as GradientAccumulator
+    from .optimization_tf import WarmUp as WarmUp
+    from .optimization_tf import create_optimizer as create_optimizer
+
+    # Pipelines
+    from .pipelines import AudioClassificationPipeline as AudioClassificationPipeline
+    from .pipelines import AutomaticSpeechRecognitionPipeline as AutomaticSpeechRecognitionPipeline
+    from .pipelines import CsvPipelineDataFormat as CsvPipelineDataFormat
+    from .pipelines import DepthEstimationPipeline as DepthEstimationPipeline
+    from .pipelines import DocumentQuestionAnsweringPipeline as DocumentQuestionAnsweringPipeline
+    from .pipelines import FeatureExtractionPipeline as FeatureExtractionPipeline
+    from .pipelines import FillMaskPipeline as FillMaskPipeline
+    from .pipelines import ImageClassificationPipeline as ImageClassificationPipeline
+    from .pipelines import ImageFeatureExtractionPipeline as ImageFeatureExtractionPipeline
+    from .pipelines import ImageSegmentationPipeline as ImageSegmentationPipeline
+    from .pipelines import ImageTextToTextPipeline as ImageTextToTextPipeline
+    from .pipelines import ImageToImagePipeline as ImageToImagePipeline
+    from .pipelines import ImageToTextPipeline as ImageToTextPipeline
+    from .pipelines import JsonPipelineDataFormat as JsonPipelineDataFormat
+    from .pipelines import KeypointMatchingPipeline as KeypointMatchingPipeline
+    from .pipelines import MaskGenerationPipeline as MaskGenerationPipeline
+    from .pipelines import NerPipeline as NerPipeline
+    from .pipelines import ObjectDetectionPipeline as ObjectDetectionPipeline
+    from .pipelines import PipedPipelineDataFormat as PipedPipelineDataFormat
+    from .pipelines import Pipeline as Pipeline
+    from .pipelines import PipelineDataFormat as PipelineDataFormat
+    from .pipelines import QuestionAnsweringPipeline as QuestionAnsweringPipeline
+    from .pipelines import SummarizationPipeline as SummarizationPipeline
+    from .pipelines import TableQuestionAnsweringPipeline as TableQuestionAnsweringPipeline
+    from .pipelines import Text2TextGenerationPipeline as Text2TextGenerationPipeline
+    from .pipelines import TextClassificationPipeline as TextClassificationPipeline
+    from .pipelines import TextGenerationPipeline as TextGenerationPipeline
+    from .pipelines import TextToAudioPipeline as TextToAudioPipeline
+    from .pipelines import TokenClassificationPipeline as TokenClassificationPipeline
+    from .pipelines import TranslationPipeline as TranslationPipeline
+    from .pipelines import VideoClassificationPipeline as VideoClassificationPipeline
+    from .pipelines import VisualQuestionAnsweringPipeline as VisualQuestionAnsweringPipeline
+    from .pipelines import ZeroShotAudioClassificationPipeline as ZeroShotAudioClassificationPipeline
+    from .pipelines import ZeroShotClassificationPipeline as ZeroShotClassificationPipeline
+    from .pipelines import ZeroShotImageClassificationPipeline as ZeroShotImageClassificationPipeline
+    from .pipelines import ZeroShotObjectDetectionPipeline as ZeroShotObjectDetectionPipeline
+    from .pipelines import pipeline as pipeline
+    from .processing_utils import ProcessorMixin as ProcessorMixin
+    from .pytorch_utils import Conv1D as Conv1D
+    from .pytorch_utils import apply_chunking_to_forward as apply_chunking_to_forward
+    from .pytorch_utils import prune_layer as prune_layer
+
+    # Tokenization
+    from .tokenization_utils import PreTrainedTokenizer as PreTrainedTokenizer
+    from .tokenization_utils_base import AddedToken as AddedToken
+    from .tokenization_utils_base import BatchEncoding as BatchEncoding
+    from .tokenization_utils_base import CharSpan as CharSpan
+    from .tokenization_utils_base import PreTrainedTokenizerBase as PreTrainedTokenizerBase
+    from .tokenization_utils_base import SpecialTokensMixin as SpecialTokensMixin
+    from .tokenization_utils_base import TokenSpan as TokenSpan
+    from .tokenization_utils_fast import PreTrainedTokenizerFast as PreTrainedTokenizerFast
+
+    # Trainer
+    from .trainer import Trainer as Trainer
+
+    # Trainer
+    from .trainer_callback import DefaultFlowCallback as DefaultFlowCallback
+    from .trainer_callback import EarlyStoppingCallback as EarlyStoppingCallback
+    from .trainer_callback import PrinterCallback as PrinterCallback
+    from .trainer_callback import ProgressCallback as ProgressCallback
+    from .trainer_callback import TrainerCallback as TrainerCallback
+    from .trainer_callback import TrainerControl as TrainerControl
+    from .trainer_callback import TrainerState as TrainerState
+    from .trainer_pt_utils import torch_distributed_zero_first as torch_distributed_zero_first
+    from .trainer_seq2seq import Seq2SeqTrainer as Seq2SeqTrainer
+    from .trainer_utils import EvalPrediction as EvalPrediction
+    from .trainer_utils import IntervalStrategy as IntervalStrategy
+    from .trainer_utils import SchedulerType as SchedulerType
+    from .trainer_utils import enable_full_determinism as enable_full_determinism
+    from .trainer_utils import set_seed as set_seed
+    from .training_args import TrainingArguments as TrainingArguments
+    from .training_args_seq2seq import Seq2SeqTrainingArguments as Seq2SeqTrainingArguments
+    from .training_args_tf import TFTrainingArguments as TFTrainingArguments
+
+    # Files and general utilities
+    from .utils import CONFIG_NAME as CONFIG_NAME
+    from .utils import MODEL_CARD_NAME as MODEL_CARD_NAME
+    from .utils import PYTORCH_PRETRAINED_BERT_CACHE as PYTORCH_PRETRAINED_BERT_CACHE
+    from .utils import PYTORCH_TRANSFORMERS_CACHE as PYTORCH_TRANSFORMERS_CACHE
+    from .utils import SPIECE_UNDERLINE as SPIECE_UNDERLINE
+    from .utils import TF2_WEIGHTS_NAME as TF2_WEIGHTS_NAME
+    from .utils import TF_WEIGHTS_NAME as TF_WEIGHTS_NAME
+    from .utils import TRANSFORMERS_CACHE as TRANSFORMERS_CACHE
+    from .utils import WEIGHTS_NAME as WEIGHTS_NAME
+    from .utils import TensorType as TensorType
+    from .utils import add_end_docstrings as add_end_docstrings
+    from .utils import add_start_docstrings as add_start_docstrings
+    from .utils import is_apex_available as is_apex_available
+    from .utils import is_av_available as is_av_available
+    from .utils import is_datasets_available as is_datasets_available
+    from .utils import is_faiss_available as is_faiss_available
+    from .utils import is_matplotlib_available as is_matplotlib_available
+    from .utils import is_phonemizer_available as is_phonemizer_available
+    from .utils import is_psutil_available as is_psutil_available
+    from .utils import is_py3nvml_available as is_py3nvml_available
+    from .utils import is_pyctcdecode_available as is_pyctcdecode_available
+    from .utils import is_sacremoses_available as is_sacremoses_available
+    from .utils import is_safetensors_available as is_safetensors_available
+    from .utils import is_sklearn_available as is_sklearn_available
+    from .utils import is_torch_hpu_available as is_torch_hpu_available
+    from .utils import is_torch_mlu_available as is_torch_mlu_available
+    from .utils import is_torch_musa_available as is_torch_musa_available
+    from .utils import is_torch_neuroncore_available as is_torch_neuroncore_available
+    from .utils import is_torch_npu_available as is_torch_npu_available
+    from .utils import is_torch_xla_available as is_torch_xla_available
+    from .utils import is_torch_xpu_available as is_torch_xpu_available
+
+    # bitsandbytes config
+    from .utils.quantization_config import AqlmConfig as AqlmConfig
+    from .utils.quantization_config import AutoRoundConfig as AutoRoundConfig
+    from .utils.quantization_config import AwqConfig as AwqConfig
+    from .utils.quantization_config import BitNetQuantConfig as BitNetQuantConfig
+    from .utils.quantization_config import BitsAndBytesConfig as BitsAndBytesConfig
+    from .utils.quantization_config import CompressedTensorsConfig as CompressedTensorsConfig
+    from .utils.quantization_config import EetqConfig as EetqConfig
+    from .utils.quantization_config import FbgemmFp8Config as FbgemmFp8Config
+    from .utils.quantization_config import FineGrainedFP8Config as FineGrainedFP8Config
+    from .utils.quantization_config import FPQuantConfig as FPQuantConfig
+    from .utils.quantization_config import GPTQConfig as GPTQConfig
+    from .utils.quantization_config import HiggsConfig as HiggsConfig
+    from .utils.quantization_config import HqqConfig as HqqConfig
+    from .utils.quantization_config import QuantoConfig as QuantoConfig
+    from .utils.quantization_config import QuarkConfig as QuarkConfig
+    from .utils.quantization_config import SpQRConfig as SpQRConfig
+    from .utils.quantization_config import TorchAoConfig as TorchAoConfig
+    from .utils.quantization_config import VptqConfig as VptqConfig
+    from .video_processing_utils import BaseVideoProcessor as BaseVideoProcessor
+
+else:
+    import sys
+
+    _import_structure = {k: set(v) for k, v in _import_structure.items()}
+
+    import_structure = define_import_structure(Path(__file__).parent / "models", prefix="models")
+    import_structure[frozenset({})].update(_import_structure)
+
+    sys.modules[__name__] = _LazyModule(
+        __name__,
+        globals()["__file__"],
+        import_structure,
+        module_spec=__spec__,
+        extra_objects={"__version__": __version__},
     )
 
-if version.parse(transformers.__version__) >= version.parse("4.53.0"):
-    from .models.glm4v import (
-        Glm4vForConditionalGeneration,
-        Glm4vImageProcessor,
-        Glm4vImageProcessorFast,
-        Glm4vModel,
-        Glm4vPreTrainedModel,
-        Glm4vProcessor,
-        Glm4vTextModel,
-        Glm4vVideoProcessor,
-        Glm4vVisionModel,
-    )
-    from .models.minimax import (
-        MiniMaxForCausalLM,
-        MiniMaxForQuestionAnswering,
-        MiniMaxForSequenceClassification,
-        MiniMaxForTokenClassification,
-        MiniMaxModel,
-        MiniMaxPreTrainedModel,
-    )
-    from .models.qwen2_5_omni import (
-        Qwen2_5OmniForConditionalGeneration,
-        Qwen2_5OmniPreTrainedModel,
-        Qwen2_5OmniPreTrainedModelForConditionalGeneration,
-        Qwen2_5OmniTalkerForConditionalGeneration,
-        Qwen2_5OmniTalkerModel,
-        Qwen2_5OmniThinkerForConditionalGeneration,
-        Qwen2_5OmniThinkerTextModel,
-        Qwen2_5OmniToken2WavBigVGANModel,
-        Qwen2_5OmniToken2WavDiTModel,
-        Qwen2_5OmniToken2WavModel,
-    )
-    from .models.vjepa2 import VJEPA2ForVideoClassification, VJEPA2Model, VJEPA2PreTrainedModel
 
-if version.parse(transformers.__version__) >= version.parse("4.57.0"):
-    from .models.cohere2_vision import (
-        Cohere2VisionForConditionalGeneration,
-        Cohere2VisionImageProcessorFast,
-        Cohere2VisionModel,
-        Cohere2VisionPreTrainedModel,
-        Cohere2VisionProcessor,
-    )
-    from .models.hunyuan_v1_dense import HunYuanDenseV1ForCausalLM, HunYuanDenseV1ForSequenceClassification
-    from .models.hunyuan_v1_moe import HunYuanMoEV1ForCausalLM, HunYuanMoEV1ForSequenceClassification
-    from .models.qwen3_omni_moe import *
-    from .models.qwen3_vl import (
-        Qwen3VLForConditionalGeneration,
-        Qwen3VLModel,
-        Qwen3VLPreTrainedModel,
-        Qwen3VLProcessor,
-        Qwen3VLTextModel,
-        Qwen3VLVideoProcessor,
-        Qwen3VLVisionModel,
-    )
-    from .models.qwen3_vl_moe import (
-        Qwen3VLMoeForConditionalGeneration,
-        Qwen3VLMoeModel,
-        Qwen3VLMoePreTrainedModel,
-        Qwen3VLMoeTextModel,
-        Qwen3VLMoeVisionModel,
+if not is_tf_available() and not is_torch_available() and not is_flax_available():
+    logger.warning_advice(
+        "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. "
+        "Models won't be available and only tokenizers, configuration "
+        "and file/data utilities can be used."
     )

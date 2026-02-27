@@ -14,15 +14,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import warnings
-from dataclasses import dataclass
-from typing import Optional, Tuple
 
-from transformers.utils import ModelOutput
+from dataclasses import dataclass
 
 import mindspore as ms
 
 from .cache_utils import Cache, EncoderDecoderCache
+from transformers.utils import ModelOutput
 
 
 @dataclass
@@ -46,9 +44,9 @@ class BaseModelOutput(ModelOutput):
             heads.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -66,8 +64,8 @@ class BaseModelOutputWithNoAttention(ModelOutput):
             Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -96,10 +94,10 @@ class BaseModelOutputWithPooling(ModelOutput):
             heads.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    pooler_output: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    pooler_output: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -119,9 +117,9 @@ class BaseModelOutputWithPoolingAndNoAttention(ModelOutput):
             Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    pooler_output: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    pooler_output: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -154,10 +152,10 @@ class BaseModelOutputWithPast(ModelOutput):
             heads.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -179,8 +177,7 @@ class BaseModelOutputWithCrossAttentions(ModelOutput):
 
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
-        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or
-            when `config.output_attentions=True`):
+        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
             sequence_length)`.
 
@@ -188,10 +185,10 @@ class BaseModelOutputWithCrossAttentions(ModelOutput):
             weighted average in the cross-attention heads.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -218,8 +215,7 @@ class BaseModelOutputWithPoolingAndCrossAttentions(ModelOutput):
 
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
-        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and
-        `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):
+        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
             sequence_length)`.
 
@@ -233,12 +229,12 @@ class BaseModelOutputWithPoolingAndCrossAttentions(ModelOutput):
             input) to speed up sequential decoding.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    pooler_output: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    past_key_values: Optional[Cache] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    pooler_output: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    past_key_values: Cache | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -269,7 +265,7 @@ class BaseModelOutputWithPastAndCrossAttentions(ModelOutput):
 
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
-        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):  # noqa: E501
+        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
             sequence_length)`.
 
@@ -277,11 +273,11 @@ class BaseModelOutputWithPastAndCrossAttentions(ModelOutput):
             weighted average in the cross-attention heads.
     """
 
-    last_hidden_state: ms.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ms.Tensor]]] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -322,14 +318,14 @@ class MoECausalLMOutputWithPast(ModelOutput):
             modules.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    z_loss: Optional[ms.Tensor] = None
-    aux_loss: Optional[ms.Tensor] = None
-    router_logits: Optional[Tuple[ms.Tensor]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    z_loss: ms.Tensor | None = None
+    aux_loss: ms.Tensor | None = None
+    router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -351,18 +347,18 @@ class MoEModelOutput(ModelOutput):
 
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
-        router_probs (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or
-            when `config.output_router_probs=True`):
+        router_probs (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or when `config.output_router_probs=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, sequence_length, num_experts)`.
 
             Raw router probabilities that are computed by MoE routers, these terms are used to compute the auxiliary
             loss and the z_loss for Mixture of Experts models.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    router_probs: Optional[Tuple[ms.Tensor]] = None
+    last_hidden_state: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    router_probs: tuple[ms.Tensor] | None = None
+    router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -390,19 +386,18 @@ class MoeModelOutputWithPast(ModelOutput):
 
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
-        router_logits (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or
-            when `config.output_router_probs=True`):
+        router_logits (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or when `config.output_router_probs=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, sequence_length, num_experts)`.
 
             Raw router logtis (post-softmax) that are computed by MoE routers, these terms are used to compute the auxiliary
             loss for Mixture of Experts models.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    router_logits: Optional[Tuple[ms.Tensor]] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -420,8 +415,7 @@ class MoeCausalLMOutputWithPast(ModelOutput):
         aux_loss (`ms.Tensor`, *optional*, returned when `labels` is provided):
             aux_loss for the sparse modules.
 
-        router_logits (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or
-            when `config.output_router_probs=True`):
+        router_logits (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or when `config.output_router_probs=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, sequence_length, num_experts)`.
 
             Raw router logtis (post-softmax) that are computed by MoE routers, these terms are used to compute the auxiliary
@@ -445,13 +439,13 @@ class MoeCausalLMOutputWithPast(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    aux_loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    router_logits: Optional[Tuple[ms.Tensor]] = None
+    loss: ms.Tensor | None = None
+    aux_loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -483,27 +477,26 @@ class MoEModelOutputWithPastAndCrossAttentions(ModelOutput):
 
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
-        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or
-            when `config.output_attentions=True`):
+        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
             sequence_length)`.
 
             Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
             weighted average in the cross-attention heads.
-        router_probs (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or
-            when `config.output_router_probs=True`):
+        router_probs (`tuple(ms.Tensor)`, *optional*, returned when `output_router_probs=True` and `config.add_router_probs=True` is passed or when `config.output_router_probs=True`):
             Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, sequence_length, num_experts)`.
 
             Raw router probabilities that are computed by MoE routers, these terms are used to compute the auxiliary
             loss and the z_loss for Mixture of Experts models.
     """
 
-    last_hidden_state: ms.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ms.Tensor]]] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    router_probs: Optional[Tuple[ms.Tensor]] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    router_probs: tuple[ms.Tensor] | None = None
+    router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -518,10 +511,8 @@ class Seq2SeqModelOutput(ModelOutput):
 
             If `past_key_values` is used only the last hidden-state of the sequences of shape `(batch_size, 1,
             hidden_size)` is output.
-        past_key_values (`tuple(tuple(ms.Tensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(ms.Tensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
-            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+        past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -557,14 +548,14 @@ class Seq2SeqModelOutput(ModelOutput):
             self-attention heads.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -580,8 +571,7 @@ class Seq2SeqMoEModelOutput(ModelOutput):
             If `past_key_values` is used only the last hidden-state of the sequences of shape `(batch_size, 1,
             hidden_size)` is output.
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -626,16 +616,16 @@ class Seq2SeqMoEModelOutput(ModelOutput):
             modules.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_router_logits: Optional[Tuple[ms.Tensor]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_router_logits: Optional[Tuple[ms.Tensor]] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    decoder_router_logits: tuple[ms.Tensor] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -661,10 +651,10 @@ class CausalLMOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -695,11 +685,11 @@ class CausalLMOutputWithPast(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -736,12 +726,12 @@ class CausalLMOutputWithCrossAttentions(ModelOutput):
             `past_key_values` input) to speed up sequential decoding.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -772,11 +762,11 @@ class SequenceClassifierOutputWithPast(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[Cache] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: Cache | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -802,10 +792,10 @@ class MaskedLMOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -819,8 +809,7 @@ class Seq2SeqLMOutput(ModelOutput):
         logits (`ms.Tensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
             Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -856,15 +845,15 @@ class Seq2SeqLMOutput(ModelOutput):
             self-attention heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -878,8 +867,7 @@ class Seq2SeqMoEOutput(ModelOutput):
         logits (`ms.Tensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
             Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -924,21 +912,21 @@ class Seq2SeqMoEOutput(ModelOutput):
             models.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    encoder_z_loss: Optional[ms.Tensor] = None
-    decoder_z_loss: Optional[ms.Tensor] = None
-    encoder_aux_loss: Optional[ms.Tensor] = None
-    decoder_aux_loss: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_router_logits: Optional[Tuple[ms.Tensor]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_router_logits: Optional[Tuple[ms.Tensor]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    encoder_z_loss: ms.Tensor | None = None
+    decoder_z_loss: ms.Tensor | None = None
+    encoder_aux_loss: ms.Tensor | None = None
+    decoder_aux_loss: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    decoder_router_logits: tuple[ms.Tensor] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_router_logits: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -965,10 +953,10 @@ class NextSentencePredictorOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -994,10 +982,10 @@ class SequenceClassifierOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1011,8 +999,7 @@ class Seq2SeqSequenceClassifierOutput(ModelOutput):
         logits (`ms.Tensor` of shape `(batch_size, config.num_labels)`):
             Classification (or regression if config.num_labels==1) scores (before SoftMax).
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -1048,15 +1035,15 @@ class Seq2SeqSequenceClassifierOutput(ModelOutput):
             self-attention heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1084,10 +1071,10 @@ class MultipleChoiceModelOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1113,10 +1100,10 @@ class TokenClassifierOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1144,75 +1131,72 @@ class QuestionAnsweringModelOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    start_logits: Optional[ms.Tensor] = None
-    end_logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    start_logits: ms.Tensor | None = None
+    end_logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
 class Seq2SeqQuestionAnsweringModelOutput(ModelOutput):
     """
-        Base class for outputs of sequence-to-sequence question answering models.
+    Base class for outputs of sequence-to-sequence question answering models.
 
-        Args:
-            loss (`ms.Tensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
-                Total span extraction loss is the sum of a Cross-Entropy for the start and end positions.
-            start_logits (`ms.Tensor` of shape `(batch_size, sequence_length)`):
-                Span-start scores (before SoftMax).
-            end_logits (`ms.Tensor` of shape `(batch_size, sequence_length)`):
-                Span-end scores (before SoftMax).
-            past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-                It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-                [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
-    ]
-                Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
-                blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
-            decoder_hidden_states (`tuple(ms.Tensor)`, *optional*, returned when `output_hidden_states=True` is passed or
-            when `config.output_hidden_states=True`):
-                Tuple of `ms.Tensor` (one for the output of the embeddings, if the model has an embedding layer, +
-                one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+    Args:
+        loss (`ms.Tensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Total span extraction loss is the sum of a Cross-Entropy for the start and end positions.
+        start_logits (`ms.Tensor` of shape `(batch_size, sequence_length)`):
+            Span-start scores (before SoftMax).
+        end_logits (`ms.Tensor` of shape `(batch_size, sequence_length)`):
+            Span-end scores (before SoftMax).
+        past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
-                Hidden-states of the decoder at the output of each layer plus the initial embedding outputs.
-            decoder_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-                Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-                sequence_length)`.
+            Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
+            blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
+        decoder_hidden_states (`tuple(ms.Tensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `ms.Tensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
 
-                Attentions weights of the decoder, after the attention softmax, used to compute the weighted average in the
-                self-attention heads.
-            cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-                Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-                sequence_length)`.
+            Hidden-states of the decoder at the output of each layer plus the initial embedding outputs.
+        decoder_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
 
-                Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
-                weighted average in the cross-attention heads.
-            encoder_last_hidden_state (`ms.Tensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
-                Sequence of hidden-states at the output of the last layer of the encoder of the model.
-            encoder_hidden_states (`tuple(ms.Tensor)`, *optional*, returned when `output_hidden_states=True` is passed or
-            when `config.output_hidden_states=True`):
-                Tuple of `ms.Tensor` (one for the output of the embeddings, if the model has an embedding layer, +
-                one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+            Attentions weights of the decoder, after the attention softmax, used to compute the weighted average in the
+            self-attention heads.
+        cross_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
 
-                Hidden-states of the encoder at the output of each layer plus the initial embedding outputs.
-            encoder_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-                Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-                sequence_length)`.
+            Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
+            weighted average in the cross-attention heads.
+        encoder_last_hidden_state (`ms.Tensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
+            Sequence of hidden-states at the output of the last layer of the encoder of the model.
+        encoder_hidden_states (`tuple(ms.Tensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `ms.Tensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
 
-                Attentions weights of the encoder, after the attention softmax, used to compute the weighted average in the
-                self-attention heads.
+            Hidden-states of the encoder at the output of each layer plus the initial embedding outputs.
+        encoder_attentions (`tuple(ms.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `ms.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the encoder, after the attention softmax, used to compute the weighted average in the
+            self-attention heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    start_logits: Optional[ms.Tensor] = None
-    end_logits: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    start_logits: ms.Tensor | None = None
+    end_logits: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1247,10 +1231,10 @@ class SemanticSegmenterOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1275,10 +1259,10 @@ class ImageClassifierOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1297,9 +1281,9 @@ class ImageClassifierOutputWithNoAttention(ModelOutput):
             called feature maps) of the model at the output of each stage.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1326,10 +1310,10 @@ class DepthEstimatorOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    predicted_depth: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    predicted_depth: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1354,10 +1338,10 @@ class ImageSuperResolutionOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    reconstruction: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    reconstruction: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1383,10 +1367,10 @@ class Wav2Vec2BaseModelOutput(ModelOutput):
             heads.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    extract_features: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    last_hidden_state: ms.Tensor | None = None
+    extract_features: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1414,11 +1398,11 @@ class XVectorOutput(ModelOutput):
             heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    logits: Optional[ms.Tensor] = None
-    embeddings: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    logits: ms.Tensor | None = None
+    embeddings: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1443,9 +1427,9 @@ class BackboneOutput(ModelOutput):
             heads.
     """
 
-    feature_maps: Optional[Tuple[ms.Tensor]] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    feature_maps: tuple[ms.Tensor] | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1478,11 +1462,11 @@ class BaseModelOutputWithPoolingAndProjection(ModelOutput):
             Text embeddings before the projection layer, used to mimic the last hidden state of the teacher encoder.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    pooler_output: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    projection_state: Optional[Tuple[ms.Tensor]] = None
+    last_hidden_state: ms.Tensor | None = None
+    pooler_output: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None
+    projection_state: tuple[ms.Tensor] | None = None
 
 
 @dataclass
@@ -1496,8 +1480,7 @@ class Seq2SeqSpectrogramOutput(ModelOutput):
         spectrogram (`ms.Tensor` of shape `(batch_size, sequence_length, num_bins)`):
             The predicted spectrogram.
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -1533,15 +1516,15 @@ class Seq2SeqSpectrogramOutput(ModelOutput):
             self-attention heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    spectrogram: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
+    loss: ms.Tensor | None = None
+    spectrogram: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
 
 
 @dataclass
@@ -1557,8 +1540,7 @@ class Seq2SeqTSModelOutput(ModelOutput):
             If `past_key_values` is used only the last hidden-state of the sequences of shape `(batch_size, 1,
             hidden_size)` is output.
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -1602,17 +1584,17 @@ class Seq2SeqTSModelOutput(ModelOutput):
             Static features of each time series' in a batch which are copied to the covariates at inference time.
     """
 
-    last_hidden_state: Optional[ms.Tensor] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    loc: Optional[ms.Tensor] = None
-    scale: Optional[ms.Tensor] = None
-    static_features: Optional[ms.Tensor] = None
+    last_hidden_state: ms.Tensor | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
+    loc: ms.Tensor | None = None
+    scale: ms.Tensor | None = None
+    static_features: ms.Tensor | None = None
 
 
 @dataclass
@@ -1627,8 +1609,7 @@ class Seq2SeqTSPredictionOutput(ModelOutput):
         params (`ms.Tensor` of shape `(batch_size, num_samples, num_params)`):
             Parameters of the chosen distribution.
         past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -1672,18 +1653,18 @@ class Seq2SeqTSPredictionOutput(ModelOutput):
             Static features of each time series' in a batch which are copied to the covariates at inference time.
     """
 
-    loss: Optional[ms.Tensor] = None
-    params: Optional[Tuple[ms.Tensor, ...]] = None
-    past_key_values: Optional[EncoderDecoderCache] = None
-    decoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    decoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_last_hidden_state: Optional[ms.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    encoder_attentions: Optional[Tuple[ms.Tensor, ...]] = None
-    loc: Optional[ms.Tensor] = None
-    scale: Optional[ms.Tensor] = None
-    static_features: Optional[ms.Tensor] = None
+    loss: ms.Tensor | None = None
+    params: tuple[ms.Tensor, ...] | None = None
+    past_key_values: EncoderDecoderCache | None = None
+    decoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    decoder_attentions: tuple[ms.Tensor, ...] | None = None
+    cross_attentions: tuple[ms.Tensor, ...] | None = None
+    encoder_last_hidden_state: ms.Tensor | None = None
+    encoder_hidden_states: tuple[ms.Tensor, ...] | None = None
+    encoder_attentions: tuple[ms.Tensor, ...] | None = None
+    loc: ms.Tensor | None = None
+    scale: ms.Tensor | None = None
+    static_features: ms.Tensor | None = None
 
 
 @dataclass
@@ -1697,7 +1678,7 @@ class SampleTSPredictionOutput(ModelOutput):
             Sampled values from the chosen distribution.
     """
 
-    sequences: Optional[ms.Tensor] = None
+    sequences: ms.Tensor | None = None
 
 
 @dataclass
@@ -1722,16 +1703,7 @@ class MaskedImageModelingOutput(ModelOutput):
             the self-attention heads.
     """
 
-    loss: Optional[ms.Tensor] = None
-    reconstruction: Optional[ms.Tensor] = None
-    hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
-    attentions: Optional[Tuple[ms.Tensor, ...]] = None
-
-    @property
-    def logits(self):
-        warnings.warn(
-            "logits attribute is deprecated and will be removed in version 5 of Transformers."
-            " Please use the reconstruction attribute to retrieve the final output instead.",
-            FutureWarning,
-        )
-        return self.reconstruction
+    loss: ms.Tensor | None = None
+    reconstruction: ms.Tensor | None = None
+    hidden_states: tuple[ms.Tensor, ...] | None = None
+    attentions: tuple[ms.Tensor, ...] | None = None

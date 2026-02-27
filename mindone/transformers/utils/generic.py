@@ -948,3 +948,13 @@ class GeneralInterface(MutableMapping):
 
     def valid_keys(self) -> list[str]:
         return list(self.keys())
+
+
+# v5.0.0+ compatibility functions
+def _is_tensor_or_array_like(x):
+    """Check if x is a tensor or array-like object."""
+    if is_numpy_array(x):
+        return True
+    if is_mindspore_available() and is_mindspore_tensor(x):
+        return True
+    return False

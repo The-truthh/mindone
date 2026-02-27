@@ -14,13 +14,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Optional
-
-from transformers.utils import auto_docstring, can_return_tuple
+from functools import partial
 
 import mindspore as ms
-import mindspore.nn as nn
-from mindspore import mint
+from mindspore import mint, nn
 
 from .cache_utils import Cache
 from .modeling_outputs import (
@@ -32,11 +29,13 @@ from .modeling_outputs import (
 from .models.auto import AutoModel
 from .processing_utils import Unpack
 from .utils import TransformersKwargs, logging
+from transformers.utils import can_return_tuple
+
 
 logger = logging.get_logger(__name__)
 
 
-class GradientCheckpointingLayer(nn.Cell):
+class GradientCheckpointingLayer(ms.nn.Cell):
     """Base class for layers with gradient checkpointing.
 
     This class enables gradient checkpointing functionality for a layer. By default, gradient checkpointing is disabled
@@ -63,11 +62,42 @@ class GradientCheckpointingLayer(nn.Cell):
 
     def __call__(self, *args, **kwargs):
         if self.gradient_checkpointing and self.training:
-            raise NotImplementedError
+            do_warn = False
+            layer_name = self.__class__.__name__
+            message = f"Caching is incompatible with gradient checkpointing in {layer_name}. Setting"
+
+            if "use_cache" in kwargs and kwargs["use_cache"]:
+                kwargs["use_cache"] = False
+                message += " `use_cache=False`,"
+                do_warn = True
+
+            # different names for the same thing in different layers
+            # TODO cyril: this one without `S` can be removed after deprection cycle
+            if "past_key_value" in kwargs and kwargs["past_key_value"] is not None:
+                kwargs["past_key_value"] = None
+                message += " `past_key_value=None`,"
+                do_warn = True
+
+            if "past_key_values" in kwargs and kwargs["past_key_values"] is not None:
+                kwargs["past_key_values"] = None
+                message += " `past_key_values=None`,"
+                do_warn = True
+
+            if "layer_past" in kwargs and kwargs["layer_past"] is not None:
+                kwargs["layer_past"] = None
+                message += " `layer_past=None`,"
+                do_warn = True
+
+            # warn if anything was changed
+            if do_warn:
+                message = message.rstrip(",") + "."
+                logger.warning_once(message)
+
+            return self._gradient_checkpointing_func(partial(super().__call__, **kwargs), *args)
         return super().__call__(*args, **kwargs)
 
 
-@auto_docstring
+
 class GenericForSequenceClassification:
     base_model_prefix = "model"
 
@@ -82,16 +112,15 @@ class GenericForSequenceClassification:
         self.post_init()
 
     @can_return_tuple
-    @auto_docstring
     def construct(
         self,
-        input_ids: Optional[ms.Tensor] = None,
-        attention_mask: Optional[ms.Tensor] = None,
-        position_ids: Optional[ms.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[ms.Tensor] = None,
-        labels: Optional[ms.Tensor] = None,
-        use_cache: Optional[bool] = None,
+        input_ids: ms.Tensor | None = None,
+        attention_mask: ms.Tensor | None = None,
+        position_ids: ms.Tensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: ms.Tensor | None = None,
+        labels: ms.Tensor | None = None,
+        use_cache: bool | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> SequenceClassifierOutputWithPast:
         transformer_outputs: BaseModelOutputWithPast = getattr(self, self.base_model_prefix)(
@@ -142,7 +171,7 @@ class GenericForSequenceClassification:
         )
 
 
-@auto_docstring
+
 class GenericForQuestionAnswering:
     base_model_prefix = "model"
 
@@ -162,16 +191,15 @@ class GenericForQuestionAnswering:
         getattr(self, self.base_model_prefix).embed_tokens = value
 
     @can_return_tuple
-    @auto_docstring
     def construct(
         self,
-        input_ids: Optional[ms.Tensor] = None,
-        attention_mask: Optional[ms.Tensor] = None,
-        position_ids: Optional[ms.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[ms.Tensor] = None,
-        start_positions: Optional[ms.Tensor] = None,
-        end_positions: Optional[ms.Tensor] = None,
+        input_ids: ms.Tensor | None = None,
+        attention_mask: ms.Tensor | None = None,
+        position_ids: ms.Tensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: ms.Tensor | None = None,
+        start_positions: ms.Tensor | None = None,
+        end_positions: ms.Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> QuestionAnsweringModelOutput:
         outputs: BaseModelOutputWithPast = getattr(self, self.base_model_prefix)(
@@ -186,9 +214,9 @@ class GenericForQuestionAnswering:
         sequence_output = outputs.last_hidden_state
 
         logits = self.qa_outputs(sequence_output)
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1).contiguous()
-        end_logits = end_logits.squeeze(-1).contiguous()
+        start_logits, end_logits = mint.split(logits, 1, dim=-1)
+        start_logits = start_logits.squeeze(-1)
+        end_logits = end_logits.squeeze(-1)
 
         loss = None
         if start_positions is not None and end_positions is not None:
@@ -203,7 +231,7 @@ class GenericForQuestionAnswering:
         )
 
 
-@auto_docstring
+
 class GenericForTokenClassification:
     base_model_prefix = "model"
 
@@ -218,23 +246,22 @@ class GenericForTokenClassification:
             classifier_dropout = config.hidden_dropout
         else:
             classifier_dropout = 0.1
-        self.dropout = nn.Dropout(classifier_dropout)
-        self.score = nn.Linear(config.hidden_size, config.num_labels)
+        self.dropout = mint.nn.Dropout(classifier_dropout)
+        self.score = mint.nn.Linear(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     @can_return_tuple
-    @auto_docstring
     def construct(
         self,
-        input_ids: Optional[ms.Tensor] = None,
-        attention_mask: Optional[ms.Tensor] = None,
-        position_ids: Optional[ms.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[ms.Tensor] = None,
-        labels: Optional[ms.Tensor] = None,
-        use_cache: Optional[bool] = None,
+        input_ids: ms.Tensor | None = None,
+        attention_mask: ms.Tensor | None = None,
+        position_ids: ms.Tensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: ms.Tensor | None = None,
+        labels: ms.Tensor | None = None,
+        use_cache: bool | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> TokenClassifierOutput:
         outputs: BaseModelOutputWithPast = getattr(self, self.base_model_prefix)(

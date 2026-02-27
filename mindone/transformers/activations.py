@@ -50,6 +50,10 @@ class GELUTanh(nn.Cell):
         return self.act(input)
 
 
+# Added for compatibility with autoawq which is archived now and imports PytorchGELUTanh from activations.py
+PytorchGELUTanh = GELUTanh
+
+
 class NewGELUActivation(nn.Cell):
     """
     Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see
@@ -193,7 +197,7 @@ class LaplaceActivation(nn.Cell):
 
 class ReLUSquaredActivation(nn.Cell):
     """
-    Applies the relu^2 activation introduced in https://huggingface.co/papers/2109.08668v2
+    Applies the relu^2 activation introduced in https://huggingface.co/papers/2109.08668
     """
 
     def construct(self, input):

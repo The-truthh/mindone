@@ -51,7 +51,10 @@ from mindspore.communication import GlobalComm
 from mindspore.communication.management import get_group_size
 
 from mindone.transformers.feature_extraction_sequence_utils import SequenceFeatureExtractor
+from mindone.transformers.feature_extraction_utils import FeatureExtractionMixin
+from mindone.transformers.image_processing_utils import BaseImageProcessor
 from mindone.transformers.integrations import get_reporting_integration_callbacks
+from mindone.transformers.processing_utils import ProcessorMixin
 from mindone.transformers.trainer_callback import (
     CallbackHandler,
     DefaultFlowCallback,
@@ -94,7 +97,7 @@ def _is_peft_model(model):
 class TrainOutput(NamedTuple):
     global_step: int
     training_loss: float
-    metrics: Dict[str, float]
+    metrics: dict[str, float]
 
 
 PREFIX_CHECKPOINT_DIR = "checkpoint"
@@ -114,17 +117,19 @@ class Trainer:
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Cell] = None,
-        args: TrainingArguments = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Iterable] = None,
-        eval_dataset: Optional[Iterable] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[nn.Optimizer, nn.learning_rate_schedule.LearningRateSchedule] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[Tensor, Tensor], Tensor]] = None,
+        model: PreTrainedModel | nn.Cell | None = None,
+        args: TrainingArguments | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: datasets.Dataset | Iterable | None = None,
+        eval_dataset: datasets.Dataset | dict[str, datasets.Dataset] | Iterable | None = None,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin | None = None,
+        model_init: Callable[..., PreTrainedModel] | None = None,
+        compute_loss_func: Callable | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[nn.Optimizer | None, nn.learning_rate_schedule.LearningRateSchedule | None] = (None, None),
+        optimizer_cls_and_kwargs: tuple | None = None,
+        preprocess_logits_for_metrics: Callable[[Tensor, Tensor], Tensor] | None = None,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -138,6 +143,7 @@ class Trainer:
                     " summary statistics should be returned by the function."
                 )
         self.args = args
+        self.compute_loss_func = compute_loss_func
         # Seed must be set before instantiating the model when using model
         enable_full_determinism(self.args.seed) if self.args.full_determinism else set_seed(self.args.seed)
         self.hp_name = None
@@ -184,10 +190,7 @@ class Trainer:
                 )
             self.model_init = model_init
 
-        if getattr(model, "is_parallelizable", False) and getattr(model, "model_parallel", False):
-            self.is_model_parallel = True
-        else:
-            self.is_model_parallel = False
+        self.is_model_parallel = False
 
         _is_quantized_and_base_model = getattr(model, "is_quantized", False) and not getattr(
             model, "_hf_peft_config_loaded", False
@@ -220,14 +223,15 @@ class Trainer:
             )
 
         default_collator = (
-            DataCollatorWithPadding(tokenizer)
-            if tokenizer is not None and isinstance(tokenizer, (PreTrainedTokenizerBase, SequenceFeatureExtractor))
+            DataCollatorWithPadding(processing_class)
+            if processing_class is not None and isinstance(processing_class, (PreTrainedTokenizerBase, SequenceFeatureExtractor))
             else lambda features, batch_info: default_data_collator(features, return_tensors="np")
         )
         self.data_collator = data_collator if data_collator is not None else default_collator
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
-        self.tokenizer = tokenizer
+        self.processing_class = processing_class
+        self.tokenizer = processing_class  # For backward compatibility
 
         self.model = model
 
@@ -236,15 +240,20 @@ class Trainer:
         self.compute_metrics = compute_metrics
         self.preprocess_logits_for_metrics = preprocess_logits_for_metrics
         self.optimizer, self.lr_scheduler = optimizers
+        self.optimizer_cls_and_kwargs = optimizer_cls_and_kwargs
         if model_init is not None and (self.optimizer is not None or self.lr_scheduler is not None):
             raise RuntimeError(
                 "Passing a `model_init` is incompatible with providing the `optimizers` argument. "
                 "You should subclass `Trainer` and override the `create_optimizer_and_scheduler` method."
             )
+        if optimizers != (None, None) and optimizer_cls_and_kwargs is not None:
+            raise ValueError(
+                "You cannot pass both `optimizers` and `optimizer_cls_and_kwargs`. Please choose one."
+            )
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
-            callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
+            callbacks, self.model, self.processing_class, self.optimizer, self.lr_scheduler
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
 
@@ -357,7 +366,7 @@ class Trainer:
             # Labels may be named label or label_ids, the default data collator handles that.
             self._signature_columns += list(set(["label", "label_ids"] + self.label_names))
 
-    def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
+    def _remove_unused_columns(self, dataset: "datasets.Dataset", description: str | None = None):
         if not self.args.remove_unused_columns:
             return dataset
         self._set_signature_columns_if_needed()
@@ -390,7 +399,7 @@ class Trainer:
             return dataset.remove_columns(ignored_columns)
 
     def _get_collator_with_removed_columns(
-        self, data_collator: Callable, description: Optional[str] = None
+        self, data_collator: Callable, description: str | None = None
     ) -> Callable:
         """Wrap the data collator in a callable removing unused columns."""
         if not self.args.remove_unused_columns:
@@ -418,7 +427,7 @@ class Trainer:
         lr_scheduler = self.create_scheduler(num_training_steps=num_training_steps)
         self.create_optimizer(lr_scheduler)
 
-    def get_decay_parameter_names(self, model) -> List[str]:
+    def get_decay_parameter_names(self, model) -> list[str]:
         """
         Get all parameter names that weight decay will be applied to
 
@@ -429,7 +438,7 @@ class Trainer:
         decay_parameters = [name for name in decay_parameters if "bias" not in name]
         return decay_parameters
 
-    def create_optimizer(self, lr_scheduler: Union[Tuple, List] = None):
+    def create_optimizer(self, lr_scheduler: tuple | list | None = None):
         """
         Setup the optimizer.
 
@@ -457,7 +466,10 @@ class Trainer:
                 },
             ]
 
-            optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args, opt_model)
+            if self.optimizer_cls_and_kwargs is not None:
+                optimizer_cls, optimizer_kwargs = self.optimizer_cls_and_kwargs
+            else:
+                optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args, opt_model)
 
             # Overwrite `params` in case it's created by `get_optimizer_cls_and_kwargs`
             # e.g. for GaLore optimizer.
@@ -488,8 +500,8 @@ class Trainer:
 
     @staticmethod
     def get_optimizer_cls_and_kwargs(
-        args: TrainingArguments, model: Optional[PreTrainedModel] = None
-    ) -> Tuple[Any, Any]:
+        args: TrainingArguments, model: PreTrainedModel | None = None
+    ) -> tuple[Any, Any]:
         """
         Returns the optimizer class and optimizer parameters based on the training arguments.
 
@@ -642,7 +654,7 @@ class Trainer:
 
         return loader
 
-    def _get_train_sampler(self) -> Optional[Sampler]:
+    def _get_train_sampler(self) -> Sampler | None:
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
 
@@ -675,7 +687,7 @@ class Trainer:
             # FIXME: Consider parallel scenarios
             return len(dataloader) * self.args.per_device_train_batch_size
 
-    def num_tokens(self, train_dl: ms.dataset.Dataset, max_steps: Optional[int] = None) -> int:
+    def num_tokens(self, train_dl: ms.dataset.Dataset, max_steps: int | None = None) -> int:
         """
         Helper to get number of tokens in a [`~mindspore.dataset.Dataset`] by enumerating dataloader.
         """
@@ -698,6 +710,41 @@ class Trainer:
         except KeyError:
             logger.warning("Cannot get num_tokens from dataloader")
             return train_tokens
+
+    def get_sp_size(self) -> int:
+        """Get the sequence parallel size"""
+        # MindSpore does not support sequence parallelism yet
+        return 1
+
+    def get_cp_size(self) -> int:
+        """Get the context parallel size"""
+        # MindSpore does not support context parallelism yet
+        return 1
+
+    def get_tp_size(self) -> int:
+        """Get the tensor parallel size"""
+        # MindSpore does not support tensor parallelism yet
+        return 1
+
+    def get_total_train_batch_size(self, args) -> int:
+        """Calculates total batch size (micro_batch * grad_accum * dp_world_size).
+
+        Accounts for all parallelism dimensions: TP, CP, and SP.
+
+        Formula: dp_world_size = world_size // (tp_size * cp_size * sp_size)
+        """
+        dp_world_size = args.world_size // self.get_tp_size() // self.get_cp_size() // self.get_sp_size()
+        return self._train_batch_size * args.gradient_accumulation_steps * dp_world_size
+
+    def get_num_trainable_parameters(self) -> int:
+        """Get the number of trainable parameters in the model."""
+        return sum(p.numel() for p in self.model.get_parameters() if p.requires_grad)
+
+    def get_learning_rates(self):
+        """Get the current learning rates from the optimizer."""
+        if self.optimizer is None:
+            raise ValueError("Trainer optimizer is None, please make sure you have setup the optimizer before.")
+        return [group["lr"] for group in self.optimizer.param_groups]
 
     def mindspore_jit_model(self, model, dataloader):
         # TODO: add pre-compile
@@ -797,10 +844,9 @@ class Trainer:
 
     def train(
         self,
-        resume_from_checkpoint: Optional[Union[str, bool]] = None,
-        trial: Union["optuna.Trial", Dict[str, Any]] = None,
-        ignore_keys_for_eval: Optional[List[str]] = None,
-        **kwargs,
+        resume_from_checkpoint: str | bool | None = None,
+        trial: "optuna.Trial" | dict[str, Any] | None = None,
+        ignore_keys_for_eval: list[str] | None = None,
     ):
         """
         Main training entry point.
@@ -810,13 +856,11 @@ class Trainer:
                 If a `str`, local path to a saved checkpoint as saved by a previous instance of [`Trainer`]. If a
                 `bool` and equals `True`, load the last checkpoint in *args.output_dir* as saved by a previous instance
                 of [`Trainer`]. If present, training will resume from the model/optimizer/scheduler states loaded here.
-            trial (`optuna.Trial` or `Dict[str, Any]`, *optional*):
+            trial (`optuna.Trial` or `dict[str, Any]`, *optional*):
                 The trial run or the hyperparameter dictionary for hyperparameter search.
-            ignore_keys_for_eval (`List[str]`, *optional*)
+            ignore_keys_for_eval (`list[str]`, *optional*)
                 A list of keys in the output of your model (if it is a dictionary) that should be ignored when
                 gathering predictions for evaluation during the training.
-            kwargs (`Dict[str, Any]`, *optional*):
-                Additional keyword arguments used to hide deprecated arguments
         """
         if resume_from_checkpoint is False:
             resume_from_checkpoint = None
@@ -831,16 +875,6 @@ class Trainer:
         # Attach NEFTune hooks if necessary
         if self.neftune_noise_alpha is not None:
             raise NotImplementedError
-
-        if "model_path" in kwargs:
-            resume_from_checkpoint = kwargs.pop("model_path")
-            warnings.warn(
-                "`model_path` is deprecated and will be removed in a future version. Use `resume_from_checkpoint` "
-                "instead.",
-                FutureWarning,
-            )
-        if len(kwargs) > 0:
-            raise TypeError(f"train() received got unexpected keyword arguments: {', '.join(list(kwargs.keys()))}.")
         # This might change the seed so needs to run first.
         # self._hp_search_setup(trial)  # TODO, level 3, Add hyper parameters search function
         self._train_batch_size = self.args.train_batch_size
@@ -1054,7 +1088,7 @@ class Trainer:
         # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
         self._total_loss_scalar = 0.0
         self._globalstep_last_logged = self.state.global_step
-        grad_norm: Optional[float] = None
+        grad_norm: float | None = None
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         if args.eval_on_start:
@@ -1288,7 +1322,7 @@ class Trainer:
 
     def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
-            logs: Dict[str, float] = {}
+            logs: dict[str, float] = {}
 
             # FIXME: consider parallel reduce
             # get average loss over all processes
@@ -1383,15 +1417,17 @@ class Trainer:
             # mtime is not reliable especially on some fuse fs in cloud environments.
             self._rotate_checkpoints(use_mtime=False, output_dir=run_dir)
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """
         Log `logs` on the various objects watching training.
 
         Subclass and override this method to inject custom behavior.
 
         Args:
-            logs (`Dict[str, float]`):
+            logs (`dict[str, float]`):
                 The values to log.
+            start_time (`float`, *optional*):
+                The start time of the training step. If provided, the training throughput will be logged.
         """
         if self.state.epoch is not None:
             logs["epoch"] = self.state.epoch
@@ -1402,7 +1438,7 @@ class Trainer:
         self.state.log_history.append(output)
         self.control = self.callback_handler.on_log(self.args, self.state, self.control, logs)
 
-    def _prepare_input(self, data: Union[Tensor, Any]) -> Union[Tensor, Any]:
+    def _prepare_input(self, data: Tensor | Any) -> Tensor | Any:
         """
         Prepares one `data` before feeding it to the model, be it a tensor or a nested list/dictionary of tensors.
         """
@@ -1426,7 +1462,7 @@ class Trainer:
 
         return data
 
-    def _prepare_inputs(self, inputs: Dict[str, Union[Tensor, Any]]) -> Dict[str, Union[Tensor, Any]]:
+    def _prepare_inputs(self, inputs: dict[str, Tensor | Any]) -> dict[str, Tensor | Any]:
         """
         Prepare `inputs` before feeding them to the model, converting them to tensors if they are not already and
         handling potential state.
@@ -1442,7 +1478,7 @@ class Trainer:
 
         return inputs
 
-    def _prepare_inputs_ms(self, inputs: Dict[str, Union[Tensor, Any]]):
+    def _prepare_inputs_ms(self, inputs: dict[str, Tensor | Any]):
         if len(inputs) == 0:
             raise ValueError(
                 "The batch received was empty, your model won't be able to train on it. Double-check that your "
@@ -1512,7 +1548,7 @@ class Trainer:
 
         return model
 
-    def training_step(self, model: nn.Cell, inputs: Dict[str, Union[ms.Tensor, Any]]) -> Tuple[ms.Tensor, ms.Tensor]:
+    def training_step(self, model: nn.Cell, inputs: dict[str, ms.Tensor | Any]) -> tuple[ms.Tensor, ms.Tensor]:
         """
         Perform a training step on a batch of inputs.
 
@@ -1521,14 +1557,14 @@ class Trainer:
         Args:
             model (`nn.Cell`):
                 The model to train.
-            inputs (`Dict[str, Union[ms.Tensor, Any]]`):
+            inputs (`dict[str, ms.Tensor | Any]`):
                 The inputs and targets of the model.
 
                 The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
                 argument `labels`. Check your model's documentation for all accepted arguments.
 
         Return:
-            `Tuple[ms.Tensor, ms.Tensor]`: The tensor with training loss and overflow flag on this batch.
+            `tuple[ms.Tensor, ms.Tensor]`: The tensor with training loss and overflow flag on this batch.
         """
         train_model = model
         train_model.set_train()
@@ -1578,7 +1614,7 @@ class Trainer:
         # process index.
         return self.args.process_index == 0
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+    def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
 
@@ -1596,7 +1632,7 @@ class Trainer:
             # self.push_to_hub(commit_message="Model save")
             raise NotImplementedError
 
-    def _save(self, output_dir: Optional[str] = None, state_dict=None):
+    def _save(self, output_dir: str | None = None, state_dict=None):
         # If we are executing this function, we are the process zero, so we don't check for that.
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
@@ -1641,7 +1677,7 @@ class Trainer:
 
     def _sorted_checkpoints(
         self, output_dir=None, checkpoint_prefix=PREFIX_CHECKPOINT_DIR, use_mtime=False
-    ) -> List[str]:
+    ) -> list[str]:
         ordering_and_checkpoint_path = []
 
         glob_checkpoints = [str(x) for x in Path(output_dir).glob(f"{checkpoint_prefix}-*") if os.path.isdir(x)]
@@ -1691,14 +1727,14 @@ class Trainer:
             logger.info(f"Deleting older checkpoint [{checkpoint}] due to args.save_total_limit")
             shutil.rmtree(checkpoint, ignore_errors=True)
 
-    def floating_point_ops(self, inputs: Dict[str, Union[Tensor, Any]]):
+    def floating_point_ops(self, inputs: dict[str, Tensor | Any]):
         """
         For models that inherit from [`PreTrainedModel`], uses that method to compute the number of floating point
         operations for every backward + forward pass. If using another model, either implement such a method in the
         model or subclass and override this method.
 
         Args:
-            inputs (`Dict[str, Union[ms.Tensor, Any]]`):
+            inputs (`dict[str, ms.Tensor | Any]`):
                 The inputs and targets of the model.
 
         Returns:
