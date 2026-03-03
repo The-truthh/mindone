@@ -30,6 +30,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, MutableMapping, Optional, Union
 
+# v5.0.0: is_offline_mode now from huggingface_hub
+from huggingface_hub import is_offline_mode
+
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import custom_object_save
 from transformers.safetensors_conversion import auto_conversion
@@ -38,27 +41,34 @@ from transformers.utils import (
     ADAPTER_WEIGHTS_NAME,
     CONFIG_NAME,
     DUMMY_INPUTS,
-    FLAX_WEIGHTS_NAME,
     SAFE_WEIGHTS_INDEX_NAME,
     SAFE_WEIGHTS_NAME,
-    TF2_WEIGHTS_NAME,
-    TF_WEIGHTS_NAME,
     WEIGHTS_INDEX_NAME,
     WEIGHTS_NAME,
     ModelOutput,
     PushToHubMixin,
     cached_file,
-    download_url,
     extract_commit_hash,
     find_adapter_config_file,
     has_file,
-    is_offline_mode,
-    is_remote_url,
-    is_safetensors_available,
     logging,
     replace_return_docstrings,
 )
 from transformers.utils.hub import convert_file_size_to_int, get_checkpoint_shard_files
+
+# v5.0.0: Local safetensors detection (removed from transformers.utils)
+_HAS_SAFETENSORS = False
+try:
+    from safetensors import safe_open
+
+    _HAS_SAFETENSORS = True
+except ImportError:
+    pass
+
+
+def is_safetensors_available():
+    """Check if safetensors is available (local detection for v5.0.0 compatibility)."""
+    return _HAS_SAFETENSORS
 
 import mindspore as ms
 from mindspore import Parameter, Tensor, mint, nn, ops
@@ -86,9 +96,7 @@ from .modeling_attn_mask_utils import dtype_to_min
 from .utils.generic import _CAN_RECORD_REGISTRY, OutputRecorder
 from .utils.import_utils import is_sdpa_available
 
-if is_safetensors_available():
-    from safetensors import safe_open
-
+if _HAS_SAFETENSORS:
     from mindone.safetensors.mindspore import load_file as safe_load_file
     from mindone.safetensors.mindspore import save_file as safe_save_file
 
@@ -432,7 +440,23 @@ def _get_resolved_checkpoint_files(
     """Get all the checkpoint filenames based on `pretrained_model_name_or_path`, and optional metadata if the
     checkpoints are sharded.
     This function will download the data if necessary.
+
+    Note: TF/Flax/URL loading is no longer supported in v5.0.0.
     """
+    # v5.0.0: TF/Flax loading is no longer supported
+    if from_tf:
+        raise NotImplementedError(
+            "Loading from TensorFlow checkpoints is no longer supported in transformers v5.0.0. "
+            "Please convert your checkpoint to PyTorch format first using the conversion scripts: "
+            "https://github.com/huggingface/transformers/tree/main/src/transformers/models"
+        )
+    if from_flax:
+        raise NotImplementedError(
+            "Loading from Flax checkpoints is no longer supported in transformers v5.0.0. "
+            "Please convert your checkpoint to PyTorch format first using the conversion scripts: "
+            "https://github.com/huggingface/transformers/tree/main/src/transformers/models"
+        )
+
     # This variable will flag if we're loading a sharded checkpoint. In this case the archive file is just the
     # index of the files.
     is_sharded = False
@@ -440,25 +464,22 @@ def _get_resolved_checkpoint_files(
 
     if pretrained_model_name_or_path is not None:
         pretrained_model_name_or_path = str(pretrained_model_name_or_path)
+
+        # v5.0.0: URL direct loading is no longer supported
+        if pretrained_model_name_or_path.startswith(("http://", "https://")):
+            raise ValueError(
+                "Loading models from direct URL is no longer supported in transformers v5.0.0. "
+                "Please use a model identifier from the Hugging Face Hub (e.g., 'bert-base-uncased') "
+                "or a local directory path. You can also use `huggingface-cli download` to download "
+                "models to a local directory first."
+            )
+
         is_local = os.path.isdir(pretrained_model_name_or_path)
         if is_local:
             if transformers_explicit_filename is not None:
                 # If the filename is explicitly defined, load this by default.
                 archive_file = os.path.join(pretrained_model_name_or_path, subfolder, transformers_explicit_filename)
                 is_sharded = transformers_explicit_filename.endswith(".safetensors.index.json")
-            elif from_tf and os.path.isfile(
-                os.path.join(pretrained_model_name_or_path, subfolder, TF_WEIGHTS_NAME + ".index")
-            ):
-                # Load from a TF 1.0 checkpoint in priority if from_tf
-                archive_file = os.path.join(pretrained_model_name_or_path, subfolder, TF_WEIGHTS_NAME + ".index")
-            elif from_tf and os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, TF2_WEIGHTS_NAME)):
-                # Load from a TF 2.0 checkpoint in priority if from_tf
-                archive_file = os.path.join(pretrained_model_name_or_path, subfolder, TF2_WEIGHTS_NAME)
-            elif from_flax and os.path.isfile(
-                os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_NAME)
-            ):
-                # Load from a Flax checkpoint in priority if from_flax
-                archive_file = os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_NAME)
             elif use_safetensors is not False and os.path.isfile(
                 os.path.join(pretrained_model_name_or_path, subfolder, _add_variant(SAFE_WEIGHTS_NAME, variant))
             ):
@@ -490,20 +511,6 @@ def _get_resolved_checkpoint_files(
                 )
                 is_sharded = True
             # At this stage we don't have a weight file so we will raise an error.
-            elif os.path.isfile(
-                os.path.join(pretrained_model_name_or_path, subfolder, TF_WEIGHTS_NAME + ".index")
-            ) or os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, TF2_WEIGHTS_NAME)):
-                raise EnvironmentError(
-                    f"Error no file named {_add_variant(WEIGHTS_NAME, variant)} found in directory"
-                    f" {pretrained_model_name_or_path} but there is a file for TensorFlow weights. Use"
-                    " `from_tf=True` to load this model from those weights."
-                )
-            elif os.path.isfile(os.path.join(pretrained_model_name_or_path, subfolder, FLAX_WEIGHTS_NAME)):
-                raise EnvironmentError(
-                    f"Error no file named {_add_variant(WEIGHTS_NAME, variant)} found in directory"
-                    f" {pretrained_model_name_or_path} but there is a file for Flax weights. Use `from_flax=True`"
-                    " to load this model from those weights."
-                )
             elif use_safetensors:
                 raise EnvironmentError(
                     f"Error no file named {_add_variant(SAFE_WEIGHTS_NAME, variant)} found in directory"
@@ -511,31 +518,22 @@ def _get_resolved_checkpoint_files(
                 )
             else:
                 raise EnvironmentError(
-                    f"Error no file named {_add_variant(WEIGHTS_NAME, variant)}, {TF2_WEIGHTS_NAME},"
-                    f" {TF_WEIGHTS_NAME + '.index'} or {FLAX_WEIGHTS_NAME} found in directory"
+                    f"Error no file named {_add_variant(WEIGHTS_NAME, variant)} or {_add_variant(WEIGHTS_INDEX_NAME, variant)} found in directory"
                     f" {pretrained_model_name_or_path}."
                 )
         elif os.path.isfile(os.path.join(subfolder, pretrained_model_name_or_path)):
             archive_file = pretrained_model_name_or_path
             is_local = True
         elif os.path.isfile(os.path.join(subfolder, pretrained_model_name_or_path + ".index")):
-            if not from_tf:
-                raise ValueError(
-                    f"We found a TensorFlow checkpoint at {pretrained_model_name_or_path + '.index'}, please set "
-                    "from_tf to True to load from this checkpoint."
-                )
-            archive_file = os.path.join(subfolder, pretrained_model_name_or_path + ".index")
-            is_local = True
-        elif is_remote_url(pretrained_model_name_or_path):
-            filename = pretrained_model_name_or_path
-            resolved_archive_file = download_url(pretrained_model_name_or_path)
+            # v5.0.0: TF checkpoint loading is no longer supported
+            raise NotImplementedError(
+                "Loading from TensorFlow checkpoints is no longer supported in transformers v5.0.0. "
+                f"Found TF checkpoint at {pretrained_model_name_or_path + '.index'}. "
+                "Please convert to PyTorch format first."
+            )
         else:
             # set correct filename
-            if from_tf:
-                filename = TF2_WEIGHTS_NAME
-            elif from_flax:
-                filename = FLAX_WEIGHTS_NAME
-            elif use_safetensors is not False:
+            if use_safetensors is not False:
                 filename = _add_variant(SAFE_WEIGHTS_NAME, variant)
             else:
                 filename = _add_variant(WEIGHTS_NAME, variant)
@@ -597,26 +595,13 @@ def _get_resolved_checkpoint_files(
                     if resolved_archive_file is not None:
                         is_sharded = True
                 if resolved_archive_file is None:
-                    # Otherwise, maybe there is a TF or Flax model file.  We try those to give a helpful error
-                    # message.
+                    # v5.0.0: TF/Flax loading is no longer supported
                     has_file_kwargs = {
                         "revision": revision,
                         "proxies": proxies,
                         "token": token,
                     }
-                    if has_file(pretrained_model_name_or_path, TF2_WEIGHTS_NAME, **has_file_kwargs):
-                        raise EnvironmentError(
-                            f"{pretrained_model_name_or_path} does not appear to have a file named"
-                            f" {_add_variant(WEIGHTS_NAME, variant)} but there is a file for TensorFlow weights."
-                            " Use `from_tf=True` to load this model from those weights."
-                        )
-                    elif has_file(pretrained_model_name_or_path, FLAX_WEIGHTS_NAME, **has_file_kwargs):
-                        raise EnvironmentError(
-                            f"{pretrained_model_name_or_path} does not appear to have a file named"
-                            f" {_add_variant(WEIGHTS_NAME, variant)} but there is a file for Flax weights. Use"
-                            " `from_flax=True` to load this model from those weights."
-                        )
-                    elif variant is not None and has_file(
+                    if variant is not None and has_file(
                         pretrained_model_name_or_path, WEIGHTS_NAME, **has_file_kwargs
                     ):
                         raise EnvironmentError(
@@ -627,8 +612,7 @@ def _get_resolved_checkpoint_files(
                     else:
                         raise EnvironmentError(
                             f"{pretrained_model_name_or_path} does not appear to have a file named"
-                            f" {_add_variant(WEIGHTS_NAME, variant)}, {TF2_WEIGHTS_NAME}, {TF_WEIGHTS_NAME} or"
-                            f" {FLAX_WEIGHTS_NAME}."
+                            f" {_add_variant(WEIGHTS_NAME, variant)} or {_add_variant(WEIGHTS_INDEX_NAME, variant)}."
                         )
             except EnvironmentError:
                 # Raise any environment error raise by `cached_file`. It will have a helpful error message adapted
@@ -640,8 +624,8 @@ def _get_resolved_checkpoint_files(
                     f"Can't load the model for '{pretrained_model_name_or_path}'. If you were trying to load it"
                     " from 'https://huggingface.co/models', make sure you don't have a local directory with the"
                     f" same name. Otherwise, make sure '{pretrained_model_name_or_path}' is the correct path to a"
-                    f" directory containing a file named {_add_variant(WEIGHTS_NAME, variant)},"
-                    f" {TF2_WEIGHTS_NAME}, {TF_WEIGHTS_NAME} or {FLAX_WEIGHTS_NAME}."
+                    f" directory containing a file named {_add_variant(WEIGHTS_NAME, variant)}"
+                    f" or {_add_variant(WEIGHTS_INDEX_NAME, variant)}."
                 ) from e
 
         if is_local:
@@ -2444,6 +2428,11 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         if state_dict is None:
             state_dict = {k: v for k, v in model_to_save.parameters_and_names()}
 
+        # v5.0.0: Revert weight conversion before saving (for compatibility with weight mapping)
+        from .core_model_loading import revert_weight_conversion
+
+        state_dict = revert_weight_conversion(model_to_save, state_dict)
+
         if any(
             allowed_name in class_name.__name__.lower()
             for class_name in self.__class__.__mro__[:-1]
@@ -2535,7 +2524,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         local_files_only: bool = False,
         token: Optional[Union[str, bool]] = None,
         revision: str = "main",
-        use_safetensors: bool = None,
+        use_safetensors: Optional[bool] = True,
         weights_only: bool = True,
         **kwargs,
     ):
@@ -2660,9 +2649,12 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             variant (`str`, *optional*):
                 If specified load weights from `variant` filename, *e.g.* mindspore_model.<variant>.bin. `variant` is
                 ignored when using `from_tf` or `from_flax`.
-            use_safetensors (`bool`, *optional*, defaults to `None`):
-                Whether or not to use `safetensors` checkpoints. Defaults to `None`. If not specified and `safetensors`
-                is not installed, it will be set to `False`.
+            use_safetensors (`bool`, *optional*, defaults to `True`):
+                Whether or not to use `safetensors` checkpoints. Defaults to `True`. Three possible values:
+
+                - `True`: Safetensors will be used (raises error if not available).
+                - `False`: Safetensors will not be used (raises error as MindONE only supports safetensors).
+                - `None`: Defaults to safetensors if available, otherwise behavior may vary.
 
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update the configuration object (after it being loaded) and initiate the model (e.g.,
@@ -2723,6 +2715,21 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         state_dict = kwargs.pop("state_dict", None)
         from_tf = kwargs.pop("from_tf", False)
         from_flax = kwargs.pop("from_flax", False)
+
+        # v5.0.0: TF/Flax loading is no longer supported
+        if from_tf:
+            raise NotImplementedError(
+                "Loading from TensorFlow checkpoints is no longer supported in transformers v5.0.0. "
+                "Please convert your checkpoint to PyTorch format first using the conversion scripts: "
+                "https://github.com/huggingface/transformers/tree/main/src/transformers/models"
+            )
+        if from_flax:
+            raise NotImplementedError(
+                "Loading from Flax checkpoints is no longer supported in transformers v5.0.0. "
+                "Please convert your checkpoint to PyTorch format first using the conversion scripts: "
+                "https://github.com/huggingface/transformers/tree/main/src/transformers/models"
+            )
+
         resume_download = kwargs.pop("resume_download", None)
         proxies = kwargs.pop("proxies", None)
         output_loading_info = kwargs.pop("output_loading_info", False)
@@ -2763,6 +2770,16 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                     "`token` and `use_auth_token` are both specified. Please set only the argument `token`."
                 )
             token = use_auth_token
+
+        # v5.0.0: use_safetensors semantics
+        # - True (default): Force safetensors usage
+        # - False: Not supported in MindONE (only safetensors format is supported)
+        # - None: Auto-detect (defaults to True for MindONE)
+        if use_safetensors is False:
+            raise ValueError(
+                "MindONE only supports safetensors format. Setting `use_safetensors=False` is not supported. "
+                "Please use `use_safetensors=True` (default) or `use_safetensors=None`."
+            )
 
         if token is not None and adapter_kwargs is not None and "token" not in adapter_kwargs:
             adapter_kwargs["token"] = token
@@ -2899,17 +2916,24 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             elif metadata.get("format") in ("np", "pt"):
                 pass
             elif metadata.get("format") == "tf":
-                from_tf = True
-                logger.info("A TensorFlow safetensors file is being loaded in a MindSpore model.")
+                # v5.0.0: TF loading is no longer supported
+                raise NotImplementedError(
+                    "Loading from TensorFlow format safetensors files is no longer supported in transformers v5.0.0. "
+                    "Please convert your checkpoint to PyTorch format first."
+                )
             elif metadata.get("format") == "flax":
-                from_flax = True
-                logger.info("A Flax safetensors file is being loaded in a PyTorch model.")
+                # v5.0.0: Flax loading is no longer supported
+                raise NotImplementedError(
+                    "Loading from Flax format safetensors files is no longer supported in transformers v5.0.0. "
+                    "Please convert your checkpoint to PyTorch format first."
+                )
             else:
                 raise ValueError(
                     f"Incompatible safetensors file. File metadata is not ['pt', 'tf', 'flax'] but {metadata.get('format')}"
                 )
 
-        from_pt = not (from_tf | from_flax)
+        # v5.0.0: Only PyTorch format is supported (TF/Flax removed)
+        from_pt = True
 
         # load pt weights early so that we know which dtype to init the model under
         if from_pt:
@@ -2963,29 +2987,25 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         if model._keep_in_fp32_modules_strict is not None and (dtype == ms.float16 or dtype == ms.bfloat16):
             keep_in_fp32_modules.extend(model._keep_in_fp32_modules_strict)
 
-        if from_tf:
-            raise NotImplementedError("loading tf checkpoint in mindspore model is not yet supported.")
-        elif from_flax:
-            raise NotImplementedError("loading flax checkpoint in mindspore model is not yet supported.")
-        elif from_pt:
-            (
-                model,
-                missing_keys,
-                unexpected_keys,
-                mismatched_keys,
-                error_msgs,
-            ) = cls._load_pretrained_model(
-                model,
-                state_dict,
-                loaded_state_dict_keys,  # XXX: rename?
-                resolved_archive_file,
-                pretrained_model_name_or_path,
-                ignore_mismatched_sizes=ignore_mismatched_sizes,
-                sharded_metadata=sharded_metadata,
-                dtype=mindspore_dtype,
-                keep_in_fp32_modules=keep_in_fp32_modules,
-                key_mapping=key_mapping,
-            )
+        # v5.0.0: Load PyTorch format weights (TF/Flax support removed)
+        (
+            model,
+            missing_keys,
+            unexpected_keys,
+            mismatched_keys,
+            error_msgs,
+        ) = cls._load_pretrained_model(
+            model,
+            state_dict,
+            loaded_state_dict_keys,  # XXX: rename?
+            resolved_archive_file,
+            pretrained_model_name_or_path,
+            ignore_mismatched_sizes=ignore_mismatched_sizes,
+            sharded_metadata=sharded_metadata,
+            dtype=mindspore_dtype,
+            keep_in_fp32_modules=keep_in_fp32_modules,
+            key_mapping=key_mapping,
+        )
 
         if _adapter_model_path is not None:
             model.load_adapter(
@@ -3182,6 +3202,9 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         key_mapping: Optional[dict[str, str]] = None,
         weights_only: bool = True,
     ):
+        # v5.0.0: Use core loader for unified weight loading
+        from .core_model_loading import convert_and_load_state_dict_in_model
+
         model_state_dict = {k: v for k, v in model.parameters_and_names()}
         prefix = model.base_model_prefix
         original_loaded_keys = loaded_keys
@@ -3258,7 +3281,15 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 ignore_mismatched_sizes,
                 prefix,
             )
-            error_msgs = _load_state_dict_into_model(model_to_load, state_dict, start_prefix, is_sharded=False)
+            # v5.0.0: Use core loader for unified loading interface
+            _, _, _, _, conversion_errors = convert_and_load_state_dict_in_model(
+                model_to_load,
+                state_dict,
+                ignore_mismatched_sizes=ignore_mismatched_sizes,
+                start_prefix=start_prefix,
+                is_sharded=False,
+            )
+            error_msgs = list(conversion_errors)
         else:
             # Sharded checkpoint or whole but low_cpu_mem_usage==True
 
@@ -3300,7 +3331,15 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                     prefix,
                 )
 
-                error_msgs += _load_state_dict_into_model(model_to_load, state_dict, start_prefix, is_sharded=True)
+                # v5.0.0: Use core loader for unified loading interface
+                _, _, _, _, conversion_errors = convert_and_load_state_dict_in_model(
+                    model_to_load,
+                    state_dict,
+                    ignore_mismatched_sizes=ignore_mismatched_sizes,
+                    start_prefix=start_prefix,
+                    is_sharded=True,
+                )
+                error_msgs += list(conversion_errors)
 
                 # force memory release
                 del state_dict
