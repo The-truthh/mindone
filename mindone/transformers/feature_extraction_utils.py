@@ -28,18 +28,20 @@ from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 import numpy as np
 from transformers.dynamic_module_utils import custom_object_save
 
-# fixme
 from transformers.utils import (
     FEATURE_EXTRACTOR_NAME,
     PROCESSOR_NAME,
     PushToHubMixin,
     copy_func,
-    download_url,
-    is_offline_mode,
-    is_remote_url,
     logging,
 )
 from transformers.utils.hub import cached_file
+from huggingface_hub import is_offline_mode
+
+
+def is_remote_url(url_or_filename):
+    """Check if the given URL is a remote URL."""
+    return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
 
 from .utils import TensorType, is_mindspore_available, is_mindspore_tensor, is_numpy_array, requires_backends
 
@@ -452,8 +454,10 @@ class FeatureExtractionMixin(PushToHubMixin):
             resolved_feature_extractor_file = pretrained_model_name_or_path
             is_local = True
         elif is_remote_url(pretrained_model_name_or_path):
-            feature_extractor_file = pretrained_model_name_or_path
-            resolved_feature_extractor_file = download_url(pretrained_model_name_or_path)
+            raise ValueError(
+                f"URL ({pretrained_model_name_or_path}) is not supported for feature extractor loading. "
+                f"Please download the file locally and provide the local path."
+            )
         else:
             feature_extractor_file = FEATURE_EXTRACTOR_NAME
             try:

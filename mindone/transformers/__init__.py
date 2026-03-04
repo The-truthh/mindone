@@ -452,14 +452,6 @@ from .models.deit import (
     DeiTModel,
     DeiTPreTrainedModel,
 )
-from .models.deprecated.xlm_prophetnet import (
-    XLMProphetNetDecoder,
-    XLMProphetNetEncoder,
-    XLMProphetNetForCausalLM,
-    XLMProphetNetForConditionalGeneration,
-    XLMProphetNetModel,
-    XLMProphetNetPreTrainedModel,
-)
 from .models.depth_anything import DepthAnythingForDepthEstimation, DepthAnythingPreTrainedModel
 from .models.depth_pro import DepthProForDepthEstimation, DepthProImageProcessor, DepthProModel, DepthProPreTrainedModel
 from .models.dia import DiaForConditionalGeneration, DiaModel, DiaPreTrainedModel, DiaProcessor

@@ -33,8 +33,110 @@ from transformers.dynamic_module_utils import (
     get_class_in_module,
     resolve_trust_remote_code,
 )
-from transformers.tokenization_utils import ExtensionsTrie
 from transformers.utils.generic import ModelOutput
+
+
+# Copied from transformers.tokenization_utils (removed in v5.0.0)
+class Trie:
+    """
+    Trie in Python. Creates a Trie out of a list of words. The trie is used to split on `added_tokens` in one pass.
+    Loose reference https://en.wikipedia.org/wiki/Trie
+    """
+
+    def __init__(self, *args):
+        self.data = {}
+        self._tokens = set()
+        self._termination_char = ""
+        self.update(*args)
+
+    def update(self, *args):
+        """
+        Updates the Trie with new tokens provided as arguments.
+        """
+        for token in tuple(*args):
+            self.add(token)
+
+    def add(self, word: str):
+        """
+        Passes over every char (utf-8 char) on word and recursively adds it to the internal `data` trie representation.
+        The special key `""` in `self._termination_char` is used to represent termination.
+        """
+        if not word:
+            return
+
+        node = self.data
+        for char in word:
+            if char not in node:
+                node[char] = {}
+            node = node[char]
+
+        node[self._termination_char] = 1
+        self._tokens.add(word)
+
+    def split(self, text: str) -> list[str]:
+        """
+        Splits a text into substrings based on the tokens in the trie.
+        """
+        results = []
+        start = 0
+        while start < len(text):
+            matched_len = self._match_node(text[start:])
+            if matched_len:
+                results.append(text[start:start + matched_len])
+                start += matched_len
+            else:
+                results.append(text[start])
+                start += 1
+        return results
+
+    def _match_node(self, text: str) -> int:
+        """
+        Matches the longest token in the trie starting from the beginning of text.
+        """
+        node = self.data
+        matched_len = 0
+        for i, char in enumerate(text):
+            if char in node:
+                node = node[char]
+                if self._termination_char in node:
+                    matched_len = i + 1
+            else:
+                break
+        return matched_len
+
+
+class ExtensionsTrie(Trie):
+    """Extension of Trie that can generate extensions of a given prefix."""
+
+    def extensions(self, prefix: str):
+        """
+        Generates all extensions of a given prefix token in the Trie.
+        """
+        prefix_node = self._get_node(prefix)
+        ret = self._collect_tokens(prefix_node)
+        return [prefix + token for token in ret]
+
+    def _get_node(self, token: str) -> dict:
+        """
+        Retrieves the node corresponding to the given token in the Trie.
+        """
+        node = self.data
+        for char in token:
+            if char not in node:
+                break
+            node = node[char]
+        return node
+
+    def _collect_tokens(self, node: dict) -> list:
+        """
+        Generates all tokens in the Trie starting from a given node.
+        """
+        tokens = [""] if "" in node else []
+        for token, subtrie_head in node.items():
+            if token != "":
+                subtokens = self._collect_tokens(subtrie_head)
+                tokens.extend([token + subtoken for subtoken in subtokens])
+        return tokens
 
 import mindspore as ms
 import mindspore.mint.distributed as dist

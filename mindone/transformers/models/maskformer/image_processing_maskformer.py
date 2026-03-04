@@ -57,7 +57,7 @@ logger = logging.get_logger(__name__)
 
 
 if TYPE_CHECKING:
-    from transformers import MaskFormerForInstanceSegmentationOutput
+    from transformers.models.maskformer.modeling_maskformer import MaskFormerForInstanceSegmentationOutput
 
 
 if is_mindspore_available():

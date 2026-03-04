@@ -53,7 +53,6 @@ from transformers.tokenization_utils_base import (
     TruncationStrategy,
 )
 
-# fixme
 from transformers.utils import (
     AUDIO_TOKENIZER_NAME,
     CHAT_TEMPLATE_DIR,
@@ -63,15 +62,18 @@ from transformers.utils import (
     PushToHubMixin,
     cached_file,
     copy_func,
-    download_url,
-    is_offline_mode,
-    is_remote_url,
     list_repo_templates,
     logging,
 )
 from transformers.utils.deprecation import deprecate_kwarg
+from huggingface_hub import is_offline_mode
 
 from .utils import TensorType
+
+
+def is_remote_url(url_or_filename):
+    """Check if the given URL is a remote URL."""
+    return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
 
 logger = logging.get_logger(__name__)
 
@@ -927,12 +929,10 @@ class ProcessorMixin(PushToHubMixin):
             resolved_audio_tokenizer_file = None
             is_local = True
         elif is_remote_url(pretrained_model_name_or_path):
-            processor_file = pretrained_model_name_or_path
-            resolved_processor_file = download_url(pretrained_model_name_or_path)
-            # can't load chat-template and audio tokenizer when given a file url as pretrained_model_name_or_path
-            resolved_chat_template_file = None
-            resolved_raw_chat_template_file = None
-            resolved_audio_tokenizer_file = None
+            raise ValueError(
+                f"URL ({pretrained_model_name_or_path}) is not supported for processor loading. "
+                f"Please download the file locally and provide the local path."
+            )
         else:
             if is_local:
                 template_dir = Path(pretrained_model_name_or_path, CHAT_TEMPLATE_DIR)

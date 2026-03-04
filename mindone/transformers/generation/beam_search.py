@@ -20,7 +20,7 @@ from collections import UserDict
 from typing import Optional, Union
 
 import numpy as np
-from transformers.generation.beam_constraints import Constraint, ConstraintListState
+from .beam_constraints import Constraint, ConstraintListState
 from transformers.utils import add_start_docstrings, logging
 
 import mindspore as ms

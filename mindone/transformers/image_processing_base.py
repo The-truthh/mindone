@@ -25,18 +25,20 @@ from typing import Any, Optional, TypeVar, Union
 import numpy as np
 from transformers.dynamic_module_utils import custom_object_save
 
-# fixme
 from transformers.utils import (
     IMAGE_PROCESSOR_NAME,
     PROCESSOR_NAME,
     PushToHubMixin,
     copy_func,
-    download_url,
-    is_offline_mode,
-    is_remote_url,
     logging,
 )
 from transformers.utils.hub import cached_file
+from huggingface_hub import is_offline_mode
+
+
+def is_remote_url(url_or_filename):
+    """Check if the given URL is a remote URL."""
+    return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
 
 from .feature_extraction_utils import BatchFeature as BaseBatchFeature
 from .image_utils import is_valid_image, load_image
@@ -328,8 +330,10 @@ class ImageProcessingMixin(PushToHubMixin):
             resolved_image_processor_file = pretrained_model_name_or_path
             is_local = True
         elif is_remote_url(pretrained_model_name_or_path):
-            image_processor_file = pretrained_model_name_or_path
-            resolved_image_processor_file = download_url(pretrained_model_name_or_path)
+            raise ValueError(
+                f"URL ({pretrained_model_name_or_path}) is not supported for image processor loading. "
+                f"Please download the file locally and provide the local path."
+            )
         else:
             image_processor_file = image_processor_filename
             try:

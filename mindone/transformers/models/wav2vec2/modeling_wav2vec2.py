@@ -23,9 +23,15 @@ from typing import Optional, Tuple, Union
 
 import numpy as np
 from transformers.models.wav2vec2.configuration_wav2vec2 import Wav2Vec2Config
-from transformers.utils import ModelOutput, cached_file, is_safetensors_available, logging
+from transformers.utils import ModelOutput, cached_file, logging
 
+import importlib
 import mindspore as ms
+
+
+def is_safetensors_available():
+    """Check if safetensors is available."""
+    return importlib.util.find_spec("safetensors") is not None
 from mindspore import Parameter, mint, nn
 from mindspore.common.initializer import Constant, HeNormal, Normal, One, Uniform, Zero, initializer
 from mindspore.mint.nn import CrossEntropyLoss

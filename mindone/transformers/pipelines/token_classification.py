@@ -5,7 +5,7 @@ import warnings
 from typing import Any, Optional, Union, overload
 
 import numpy as np
-from transformers.models.bert.tokenization_bert import BasicTokenizer
+from ..tokenization_bert import BasicTokenizer
 from transformers.utils import ExplicitEnum, add_end_docstrings
 
 import mindspore as ms

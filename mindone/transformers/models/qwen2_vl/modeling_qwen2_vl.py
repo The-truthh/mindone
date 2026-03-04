@@ -50,10 +50,7 @@ from mindone.transformers.modeling_utils import PreTrainedModel
 from mindone.transformers.processing_utils import Unpack
 from mindone.transformers.utils import TransformersKwargs
 
-try:
-    from transformers.models.qwen2_vl import Qwen2VLVisionConfig  # transformers >= 4.48.0
-except ImportError:
-    from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig
+from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig  # v5.0.0 compatible
 
 logger = logging.get_logger(__name__)
 

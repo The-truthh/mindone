@@ -26,14 +26,13 @@ from typing import Any, Dict, List, Optional, Union
 
 import requests
 import yaml
-from huggingface_hub import model_info
+from huggingface_hub import is_offline_mode, model_info
 from huggingface_hub.utils import HFValidationError
 from transformers import __version__
 from transformers.utils import (
     MODEL_CARD_NAME,
     cached_file,
     is_datasets_available,
-    is_offline_mode,
     is_tokenizers_available,
     logging,
 )
@@ -793,17 +792,14 @@ def parse_log_history(log_history):
 
 
 def extract_hyperparameters_from_keras(model):
-    # fixme
-    from transformers.modeling_tf_utils import keras
+    """Extract hyperparameters from a Keras model.
 
-    hyperparameters = {}
-    if hasattr(model, "optimizer") and model.optimizer is not None:
-        hyperparameters["optimizer"] = model.optimizer.get_config()
-    else:
-        hyperparameters["optimizer"] = None
-    hyperparameters["training_precision"] = keras.mixed_precision.global_policy().name
-
-    return hyperparameters
+    Note: This function is not supported in mindone as TensorFlow is not available.
+    """
+    raise NotImplementedError(
+        "Extracting hyperparameters from Keras models is not supported. "
+        "TensorFlow is not available in mindone."
+    )
 
 
 def _maybe_round(v, decimals=4):

@@ -15,7 +15,7 @@ import inspect
 from typing import Union
 
 import numpy as np
-from transformers.tokenization_utils import TruncationStrategy
+from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import add_end_docstrings
 
 import mindspore as ms

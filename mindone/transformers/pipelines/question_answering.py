@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
-from transformers.tokenization_utils import PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 from transformers.utils import add_end_docstrings, is_tokenizers_available
 
 from ..data import SquadExample, SquadFeatures, squad_convert_examples_to_features

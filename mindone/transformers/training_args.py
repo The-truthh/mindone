@@ -24,11 +24,27 @@ from enum import Enum
 from functools import cached_property
 from typing import List, Optional, Union
 
-from transformers import is_safetensors_available, logging
-from transformers.trainer_utils import EvaluationStrategy, HubStrategy, IntervalStrategy, SchedulerType
+from transformers import logging
+from transformers.trainer_utils import HubStrategy, IntervalStrategy, SchedulerType
 from transformers.utils.generic import ExplicitEnum
 
+
+class EvaluationStrategy(Enum):
+    """
+    Enum for evaluation strategy (transformers v5.0.0 compatible).
+    Previously available in transformers.trainer_utils, now defined locally.
+    """
+    NO = "no"
+    STEPS = "steps"
+    EPOCH = "epoch"
+
+import importlib
 import mindspore as ms
+
+
+def is_safetensors_available():
+    """Check if safetensors is available."""
+    return importlib.util.find_spec("safetensors") is not None
 from mindspore.communication.management import get_group_size, get_rank
 
 from .mindspore_adapter.utils import _is_parallel

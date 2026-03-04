@@ -4,7 +4,7 @@ deprecated file in v4.57.1"""
 import enum
 import warnings
 
-from transformers.tokenization_utils import TruncationStrategy
+from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import add_end_docstrings, logging
 
 from ..utils import is_mindspore_available

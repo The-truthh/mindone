@@ -351,7 +351,6 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("xcodec", "XcodecConfig"),
         ("xglm", "XGLMConfig"),
         ("xlm", "XLMConfig"),
-        ("xlm-prophetnet", "XLMProphetNetConfig"),
         ("xlm-roberta", "XLMRobertaConfig"),
         ("xlm-roberta-xl", "XLMRobertaXLConfig"),
         ("xlnet", "XLNetConfig"),
@@ -730,7 +729,6 @@ DEPRECATED_MODELS = [
     "tvlt",
     "van",
     "vit_hybrid",
-    "xlm_prophetnet",
 ]
 
 SPECIAL_MODEL_TYPE_TO_MODULE_NAME = OrderedDict(

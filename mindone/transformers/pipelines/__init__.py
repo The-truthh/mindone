@@ -20,20 +20,21 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union, overload
 
-from huggingface_hub import model_info
+from huggingface_hub import is_offline_mode, model_info
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.tokenization_utils import PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 from transformers.utils import (
     CONFIG_NAME,
-    HUGGINGFACE_CO_RESOLVE_ENDPOINT,
     cached_file,
     extract_commit_hash,
     is_kenlm_available,
-    is_offline_mode,
     logging,
 )
+
+# Local definition for removed API in v5.0.0
+HUGGINGFACE_CO_RESOLVE_ENDPOINT = "https://huggingface.co"
 
 from mindone.transformers.models.auto.feature_extraction_auto import AutoFeatureExtractor
 from mindone.transformers.models.auto.image_processing_auto import AutoImageProcessor
@@ -112,7 +113,7 @@ if is_mindspore_available():
 
 
 if TYPE_CHECKING:
-    from transformers.tokenization_utils_fast import PreTrainedTokenizerFast
+    from transformers import PreTrainedTokenizerFast
 
     from ..modeling_utils import PreTrainedModel
 

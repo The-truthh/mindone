@@ -23,8 +23,9 @@ from typing import Optional
 
 import numpy as np
 from tqdm import tqdm
-from transformers.models.bert.tokenization_bert import whitespace_tokenize
 from transformers.tokenization_utils_base import BatchEncoding, PreTrainedTokenizerBase, TruncationStrategy
+
+from ...tokenization_bert import whitespace_tokenize
 
 from ...utils import is_mindspore_available, logging
 from .utils import DataProcessor

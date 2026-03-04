@@ -32,12 +32,15 @@ from transformers.utils import (
     add_start_docstrings,
     cached_file,
     copy_func,
-    download_url,
-    is_offline_mode,
-    is_remote_url,
 )
+from huggingface_hub import is_offline_mode
 
 from .image_processing_utils import BatchFeature, get_size_dict
+
+
+def is_remote_url(url_or_filename):
+    """Check if the given URL is a remote URL."""
+    return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
 from .image_processing_utils_fast import BaseImageProcessorFast
 from .image_utils import ChannelDimension, SizeDict, pil_to_tensor, validate_kwargs
 from .processing_utils import Unpack, VideosKwargs
@@ -650,8 +653,10 @@ class BaseVideoProcessor(BaseImageProcessorFast):
             resolved_video_processor_file = pretrained_model_name_or_path
             is_local = True
         elif is_remote_url(pretrained_model_name_or_path):
-            video_processor_file = pretrained_model_name_or_path
-            resolved_video_processor_file = download_url(pretrained_model_name_or_path)
+            raise ValueError(
+                f"URL ({pretrained_model_name_or_path}) is not supported for video processor loading. "
+                f"Please download the file locally and provide the local path."
+            )
         else:
             video_processor_file = VIDEO_PROCESSOR_NAME
             try:

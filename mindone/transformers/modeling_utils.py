@@ -2813,11 +2813,12 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             adapter_kwargs = {}
 
         if _adapter_model_path is None:
+            # v5.0.0 compatibility: find_adapter_config_file no longer accepts resume_download
+            adapter_kwargs.pop("resume_download", None)
             _adapter_model_path = find_adapter_config_file(
                 pretrained_model_name_or_path,
                 cache_dir=cache_dir,
                 force_download=force_download,
-                resume_download=resume_download,
                 proxies=proxies,
                 local_files_only=local_files_only,
                 _commit_hash=commit_hash,
@@ -2846,7 +2847,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 cache_dir=cache_dir,
                 return_unused_kwargs=True,
                 force_download=force_download,
-                resume_download=resume_download,
                 proxies=proxies,
                 local_files_only=local_files_only,
                 token=token,

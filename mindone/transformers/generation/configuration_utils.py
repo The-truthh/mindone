@@ -23,10 +23,15 @@ from dataclasses import dataclass, is_dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import PushToHubMixin, cached_file, download_url, extract_commit_hash, is_remote_url, logging
+from transformers.utils import PushToHubMixin, cached_file, extract_commit_hash, logging
 
 from .. import __version__
 from ..utils import GENERATION_CONFIG_NAME, ExplicitEnum, is_mindspore_available
+
+
+def is_remote_url(url_or_filename):
+    """Check if the given URL is a remote URL."""
+    return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
 
 if TYPE_CHECKING:
     from ..modeling_utils import PreTrainedModel
@@ -889,8 +894,10 @@ class GenerationConfig(PushToHubMixin):
             resolved_config_file = config_path
             is_local = True
         elif is_remote_url(config_path):
-            configuration_file = config_path
-            resolved_config_file = download_url(config_path)
+            raise ValueError(
+                f"URL ({config_path}) is not supported for generation config loading. "
+                f"Please download the file locally and provide the local path."
+            )
         else:
             configuration_file = config_file_name
             try:
