@@ -1,6 +1,7 @@
 """Adapted from https://github.com/huggingface/transformers/tree/main/src/transformers/trainer_pt_utils.py."""
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
@@ -148,34 +149,27 @@ def get_model_param_count(model, trainable_only=False):
     return sum(numel(p) for p in model.get_parameters() if not trainable_only or p.requires_grad)
 
 
-def get_parameter_names(model: nn.Cell, forbidden_layer_types):
+def get_parameter_names(model, forbidden_layer_types, forbidden_layer_names=None):
     """
     Returns the names of the model parameters that are not inside a forbidden layer.
     """
-
-    # method 1
-    # _neg_result = []
-    # for name, child in model.cells_and_names():
-    #     if isinstance(child, tuple(forbidden_layer_types)):
-    #         _neg_result += [n for n, _ in child.parameters_and_names(expand=False)]
-    #
-    # result = []
-    # for p_name, _ in model.parameters_and_names():
-    #     if p_name not in _neg_result:
-    #         result += [p_name,]
-    #
-    # return result
-
-    # method 2
+    forbidden_layer_patterns = (
+        [re.compile(pattern) for pattern in forbidden_layer_names] if forbidden_layer_names is not None else []
+    )
     result = []
     for name, child in model.name_cells().items():
+        child_params = get_parameter_names(child, forbidden_layer_types, forbidden_layer_names)
         result += [
             f"{name}.{n}"
-            for n in get_parameter_names(child, forbidden_layer_types)
+            for n in child_params
             if not isinstance(child, tuple(forbidden_layer_types))
+            and not any(pattern.search(f"{name}.{n}".lower()) for pattern in forbidden_layer_patterns)
         ]
-    # Add model specific parameters (defined with nn.Parameter) since they are not in any child.
-    result += [n for n, p in model.parameters_and_names(expand=False)]
+    # Add model specific parameters that are not in any child
+    result += [
+        k for k, _ in model.parameters_and_names(expand=False) if not any(pattern.search(k.lower()) for pattern in forbidden_layer_patterns)
+    ]
+
     return result
 
 

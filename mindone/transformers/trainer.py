@@ -418,15 +418,16 @@ class Trainer:
         lr_scheduler = self.create_scheduler(num_training_steps=num_training_steps)
         self.create_optimizer(lr_scheduler)
 
-    def get_decay_parameter_names(self, model) -> List[str]:
+    def get_decay_parameter_names(self, model) -> list[str]:
         """
-        Get all parameter names that weight decay will be applied to
+        Get all parameter names that weight decay will be applied to.
 
-        Note that some models implement their own layernorm instead of calling nn.LayerNorm, weight decay could still
-        apply to those modules since this function only filter out instance of nn.LayerNorm
+        This function filters out parameters in two ways:
+        1. By layer type (instances of layers specified in ALL_LAYERNORM_LAYERS)
+        2. By parameter name patterns (containing 'bias', or variation of 'norm')
         """
-        decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
-        decay_parameters = [name for name in decay_parameters if "bias" not in name]
+        forbidden_name_patterns = [r"bias", r"layernorm", r"rmsnorm", r"(?:^|\.)norm(?:$|\.)", r"_norm(?:$|\.)"]
+        decay_parameters = get_parameter_names(model, [nn.LayerNorm], forbidden_name_patterns)
         return decay_parameters
 
     def create_optimizer(self, lr_scheduler: Union[Tuple, List] = None):
@@ -1147,7 +1148,9 @@ class Trainer:
                     self.state.epoch = epoch + (step + 1 + steps_skipped) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                    self._maybe_log_save_evaluate(tr_loss, grad_norm, self.model, trial, epoch, ignore_keys_for_eval)
+                    tr_loss = self._maybe_log_save_evaluate(
+                        tr_loss, grad_norm, self.model, trial, epoch, ignore_keys_for_eval
+                    )
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
@@ -1312,6 +1315,7 @@ class Trainer:
             self.store_flos()
 
             self.log(logs)
+        return tr_loss
 
         metrics = None
         if self.control.should_evaluate:
