@@ -1116,8 +1116,8 @@ class Trainer:
                 tr_loss_step, overflow = self.training_step(self.train_model, inputs)
                 tr_loss_step = tr_loss_step.asnumpy()
 
-                # TODO: log by callback_fn
-                logger.info(f"Epoch: {epoch}, Step: {step}, tr_loss: {tr_loss_step}, overflow: {overflow}")
+                # use log
+                # logger.info(f"Epoch: {epoch}, Step: {step}, tr_loss: {tr_loss_step}, overflow: {overflow}")
 
                 if args.logging_nan_inf_filter and (np.isnan(tr_loss_step) or np.isinf(tr_loss_step)):
                     # if loss is nan or inf simply add the average of previous logged losses
@@ -1275,15 +1275,36 @@ class Trainer:
 
     def _nested_reduce_sum(self, tensors, name=None):
         """
-        Gather value of `tensors` (tensor or list/tuple of nested tensors) and convert them to numpy before
-        concatenating them to `gathered`
+        Reduce `tensors` across devices with sum semantics.
         """
         if tensors is None:
             return
 
         if self.args.framework == "mindspore":
             if _is_parallel():
-                return ops.AllReduce()(tensors).mean()
+                return ops.AllReduce()(tensors)
+        else:
+            raise NotImplementedError
+
+        return tensors
+
+    def _nested_gather(self, tensors, name=None):
+        """
+        Gather `tensors` across devices along the first dimension.
+        """
+        if tensors is None:
+            return
+
+        if self.args.framework == "mindspore":
+            if _is_parallel():
+                if isinstance(tensors, np.ndarray):
+                    tensors = Tensor(tensors, ms.float32)
+                elif not isinstance(tensors, Tensor):
+                    tensors = Tensor(tensors, ms.float32)
+
+                if tensors.ndim == 0:
+                    tensors = tensors.reshape((1,))
+                return ops.AllGather()(tensors)
         else:
             raise NotImplementedError
 
@@ -1293,14 +1314,18 @@ class Trainer:
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: Dict[str, float] = {}
 
-            # FIXME: consider parallel reduce
-            # get average loss over all processes
-            # tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
-            # if _is_parallel():
-            #     tr_loss_scalar = self._nested_reduce_sum(tr_loss).item() / get_group_size()
-            # else:
-            #     tr_loss_scalar = tr_loss.item()
-            tr_loss_scalar = tr_loss.item() if isinstance(tr_loss, (Tensor, np.ndarray)) else tr_loss
+            # Align with upstream Trainer behavior: aggregate the logging loss across devices,
+            # then report the mean loss for the current logging window.
+            tr_loss_for_log = tr_loss
+            if isinstance(tr_loss_for_log, np.ndarray):
+                tr_loss_for_log = Tensor(tr_loss_for_log, ms.float32)
+            elif not isinstance(tr_loss_for_log, Tensor):
+                tr_loss_for_log = Tensor(tr_loss_for_log, ms.float32)
+
+            if _is_parallel():
+                tr_loss_scalar = self._nested_gather(tr_loss_for_log).mean().item()
+            else:
+                tr_loss_scalar = tr_loss_for_log.item()
 
             # reset tr_loss to zero
             tr_loss -= tr_loss
@@ -1315,7 +1340,6 @@ class Trainer:
             self.store_flos()
 
             self.log(logs)
-        return tr_loss
 
         metrics = None
         if self.control.should_evaluate:
@@ -1324,6 +1348,8 @@ class Trainer:
         if self.control.should_save:
             self._save_checkpoint(model, trial, metrics=metrics)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+        return tr_loss
 
     def _save_checkpoint(self, model, trial, metrics=None):
         # In all cases, including ddp/dp/deepspeed, self.model is always a reference to the model we
@@ -1404,6 +1430,7 @@ class Trainer:
 
         output = {**logs, **{"step": self.state.global_step}}
         self.state.log_history.append(output)
+        logger.info(str(output))
         self.control = self.callback_handler.on_log(self.args, self.state, self.control, logs)
 
     def _prepare_input(self, data: Union[Tensor, Any]) -> Union[Tensor, Any]:
@@ -1458,12 +1485,13 @@ class Trainer:
         # 1. get model args
         model_to_inspect = self.model
         signature = inspect.signature(model_to_inspect.construct)
-        for n, p in signature.parameters.items():
-            assert p.kind in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.VAR_POSITIONAL,
-            ), f"construct func input not position args, check in `class {model_to_inspect.__class__.__name__}`"
+        # TODO: No longer use graph mode, check if the assertion are retained
+        # for n, p in signature.parameters.items():
+        #     assert p.kind in (
+        #         inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        #         inspect.Parameter.POSITIONAL_ONLY,
+        #         inspect.Parameter.VAR_POSITIONAL,
+        #     ), f"construct func input not position args, check in `class {model_to_inspect.__class__.__name__}`"
         _signature_columns = list(signature.parameters.keys())
         _signature_columns = _signature_columns[1:] if _signature_columns[0] == self else _signature_columns
 
