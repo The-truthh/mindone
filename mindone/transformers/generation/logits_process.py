@@ -658,6 +658,48 @@ class TopKLogitsWarper(LogitsProcessor):
         return scores_processed
 
 
+class TopHLogitsWarper(LogitsProcessor):
+    """
+    [`LogitsProcessor`] that performs Top-H sampling by retaining the smallest prefix of high-probability tokens whose
+    cumulative entropy stays below `top_h * H(p)`.
+    """
+
+    def __init__(self, top_h: float, filter_value: float = -float("Inf")):
+        super().__init__()
+        if not (0 < top_h <= 1):
+            raise ValueError("`top_h` must be in the range (0, 1].")
+        self.top_n = 100
+        self.top_h = top_h
+        self.filter_value = filter_value
+
+    @add_start_docstrings(LOGITS_PROCESSOR_INPUTS_DOCSTRING)
+    def __call__(self, input_ids: ms.Tensor, scores: ms.Tensor) -> ms.Tensor:
+        batch_size, vocab_size = scores.shape
+        top_n = min(self.top_n, vocab_size)
+
+        top_logits, top_indices = mint.topk(scores, top_n)
+        probs = mint.softmax(top_logits, dim=-1)
+        log_probs = mint.log(probs)
+
+        entropy_terms = -probs * log_probs
+        tau = entropy_terms.sum(dim=-1, keepdim=True) * self.top_h
+        cumulative_entropy = entropy_terms.cumsum(dim=-1)
+
+        selection_mask = cumulative_entropy <= tau
+        selection_mask[:, 0] = True
+
+        keep_mask = mint.zeros((batch_size, vocab_size), dtype=ms.bool_)
+        keep_mask = ops.tensor_scatter_elements(
+            keep_mask.astype(ms.int32),
+            indices=top_indices,
+            updates=selection_mask.astype(ms.int32),
+            axis=1,
+        ).astype(ms.bool_)
+
+        scores_processed = scores.masked_fill(~keep_mask, self.filter_value)
+        return scores_processed
+
+
 class MinPLogitsWarper(LogitsProcessor):
     """
     [`LogitsProcessor`] that performs min-p, i.e. keeps all tokens that are above a minimum probability, scaled by the

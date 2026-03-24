@@ -16,61 +16,13 @@
 import collections
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
-from transformers.configuration_utils import PretrainedConfig
-
-
-class WatermarkingConfig:
-    """
-    Configuration class for watermarking text generation.
-    Previously available in transformers.configuration_utils, now defined locally for v5.0.0 compatibility.
-
-    Args:
-        vocab_size (`int`, *optional*):
-            The model tokenizer's vocab_size. Used to calculate "green" tokens ratio.
-        greenlist_ratio (`float`, *optional*, defaults to 0.25):
-            The ratio of "green" tokens used to the vocabulary size.
-        bias (`float`, *optional*, defaults to 2.0):
-            The bias added to the selected "green" tokens' logits.
-        hashing_key (`int`, *optional*, defaults to 15485863):
-            Key used for hashing. If you deploy this watermark, use a private key.
-        seeding_scheme (`str`, *optional*, defaults to `"lefthash"`):
-            The seeding scheme used for selecting "green" tokens.
-            - "lefthash": "green" tokens selection depends on the last token
-            - "selfhash": "green" tokens selection depends on the current token itself
-        context_width (`int`, *optional*, defaults to 1):
-            The number of previous tokens to use when setting the seed.
-    """
-
-    def __init__(
-        self,
-        vocab_size: int = 50257,
-        greenlist_ratio: float = 0.25,
-        bias: float = 2.0,
-        hashing_key: int = 15485863,
-        seeding_scheme: str = "lefthash",
-        context_width: int = 1,
-        **kwargs,
-    ):
-        self.vocab_size = vocab_size
-        self.greenlist_ratio = greenlist_ratio
-        self.bias = bias
-        self.hashing_key = hashing_key
-        self.seeding_scheme = seeding_scheme
-        self.context_width = context_width
-
-    def to_dict(self) -> dict:
-        """Convert this config to a dictionary."""
-        return {
-            "vocab_size": self.vocab_size,
-            "greenlist_ratio": self.greenlist_ratio,
-            "bias": self.bias,
-            "hashing_key": self.hashing_key,
-            "seeding_scheme": self.seeding_scheme,
-            "context_width": self.context_width,
-        }
+try:
+    from transformers.configuration_utils import PreTrainedConfig
+except ImportError:
+    from transformers.configuration_utils import PretrainedConfig as PreTrainedConfig
 
 import mindspore as ms
 from mindspore import Parameter, mint, nn
@@ -79,6 +31,9 @@ from mindspore.nn import BCELoss
 from ..modeling_utils import PreTrainedModel
 from ..utils import ModelOutput, logging
 from .logits_process import SynthIDTextWatermarkLogitsProcessor, WatermarkLogitsProcessor
+
+if TYPE_CHECKING:
+    from .configuration_utils import WatermarkingConfig
 
 logger = logging.get_logger(__name__)
 
@@ -126,7 +81,7 @@ class WatermarkDetector:
     See [the paper](https://huggingface.co/papers/2306.04634) for more information.
 
     Args:
-        model_config (`PretrainedConfig`):
+        model_config (`PreTrainedConfig`):
             The model config that will be used to get model specific arguments used when generating.
         watermarking_config (Union[`WatermarkingConfig`, `Dict`]):
             The exact same watermarking config and arguments used when generating text.
@@ -168,12 +123,12 @@ class WatermarkDetector:
 
     def __init__(
         self,
-        model_config: PretrainedConfig,
-        watermarking_config: Union[WatermarkingConfig, dict],
+        model_config: PreTrainedConfig,
+        watermarking_config: Union["WatermarkingConfig", dict],
         ignore_repeated_ngrams: bool = False,
         max_cache_size: int = 128,
     ):
-        if isinstance(watermarking_config, WatermarkingConfig):
+        if not isinstance(watermarking_config, dict):
             watermarking_config = watermarking_config.to_dict()
 
         self.bos_token_id = (
@@ -283,13 +238,13 @@ class WatermarkDetector:
         return prediction
 
 
-class BayesianDetectorConfig(PretrainedConfig):
+class BayesianDetectorConfig(PreTrainedConfig):
     """
     This is the configuration class to store the configuration of a [`BayesianDetectorModel`]. It is used to
     instantiate a Bayesian Detector model according to the specified arguments.
 
-    Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
-    documentation from [`PretrainedConfig`] for more information.
+    Configuration objects inherit from [`PreTrainedConfig`] and can be used to control the model outputs. Read the
+    documentation from [`PreTrainedConfig`] for more information.
 
     Args:
         watermarking_depth (`int`, *optional*):

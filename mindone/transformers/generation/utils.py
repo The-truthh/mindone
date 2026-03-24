@@ -19,7 +19,6 @@
 import copy
 import inspect
 import os
-import time
 import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
@@ -193,6 +192,7 @@ from mindone.transformers.generation.logits_process import (
     SuppressTokensAtBeginLogitsProcessor,
     SuppressTokensLogitsProcessor,
     TemperatureLogitsWarper,
+    TopHLogitsWarper,
     TopKLogitsWarper,
     TopPLogitsWarper,
     TypicalLogitsWarper,
@@ -503,6 +503,9 @@ class GenerationMixin:
     To learn more about decoding strategies refer to the [text generation strategies guide](../generation_strategies).
     """
 
+    # Should be overridden by models that generate non-text outputs.
+    output_modalities = ("text",)
+
     def load_custom_generate(
         self,
         pretrained_model_name_or_path: Optional[Union[str, os.PathLike]] = None,
@@ -663,6 +666,7 @@ class GenerationMixin:
         attention_mask: Optional[ms.Tensor] = None,
         inputs_embeds: Optional[ms.Tensor] = None,
         cache_position: Optional[ms.Tensor] = None,
+        is_first_iteration: Optional[bool] = False,
         **kwargs,
     ):
         """
@@ -684,6 +688,10 @@ class GenerationMixin:
             model_inputs["past_key_values"] = (
                 ms.mutable(past_key_values) if isinstance(past_key_values, tuple) else past_key_values
             )
+        use_cache = kwargs.get("use_cache")
+        if use_cache is None:
+            use_cache = getattr(self.config, "use_cache", False)
+        if past_key_values is not None or use_cache:
             # TODO (joao): handle the case where cache length == input_ids length. The function below results in an
             # exception because we get empty input_ids after slicing. In essence, we need to roll back the cache 1
             # token to recompute the logits for the first token to be generated (but not all caches support roll backs)
@@ -693,7 +701,7 @@ class GenerationMixin:
         input_ids_key = "decoder_input_ids" if self.config.is_encoder_decoder else "input_ids"
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step for every prompt.
         if not self.config.is_encoder_decoder:
-            if inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
+            if inputs_embeds is not None and is_first_iteration:
                 model_inputs[input_ids_key] = None
                 model_inputs["inputs_embeds"] = inputs_embeds
             else:
@@ -724,7 +732,7 @@ class GenerationMixin:
             if model_input is not None:
                 model_input = kwargs.get(model_input_name)
                 if model_input is not None:
-                    if past_key_values is not None:
+                    if past_key_values is not None or use_cache:
                         current_input_length = (
                             model_inputs["inputs_embeds"].shape[1]
                             if model_inputs.get("inputs_embeds") is not None
@@ -735,7 +743,7 @@ class GenerationMixin:
                     model_inputs[model_input_name] = model_input
 
         # 6. Create 4D attention mask is we are using a `StaticCache` (important for performant compiled forward pass)
-        if isinstance(past_key_values, StaticCache) and attention_mask.ndim == 2:
+        if isinstance(past_key_values, StaticCache) and attention_mask is not None and attention_mask.ndim == 2:
             if model_inputs["inputs_embeds"] is not None:
                 batch_size, sequence_length, _ = model_inputs["inputs_embeds"].shape
             else:
@@ -743,14 +751,14 @@ class GenerationMixin:
 
             # Create the causal mask with fixed shape in advance, to reduce recompilations. If the function to create
             # the 4D causal mask exists, it should be present in the base model (XXXModel class).
-            base_model = getattr(self, self.base_model_prefix, None)
-            if base_model is None:
+            base_model = getattr(self, self.base_model_prefix, self)
+            decoder = base_model.get_decoder() if hasattr(base_model, "get_decoder") else None
+            causal_mask_creation_function = getattr(
+                base_model, "_prepare_4d_causal_attention_mask_with_cache_position", None
+            )
+            if causal_mask_creation_function is None and decoder is not None:
                 causal_mask_creation_function = getattr(
-                    self, "_prepare_4d_causal_attention_mask_with_cache_position", None
-                )
-            else:
-                causal_mask_creation_function = getattr(
-                    base_model, "_prepare_4d_causal_attention_mask_with_cache_position", None
+                    decoder, "_prepare_4d_causal_attention_mask_with_cache_position", None
                 )
             if causal_mask_creation_function is None:
                 token_type_ids = model_inputs.get("token_type_ids")
@@ -766,6 +774,7 @@ class GenerationMixin:
                     past_key_values=past_key_values,
                     position_ids=position_ids,
                     token_type_ids=token_type_ids,
+                    is_first_iteration=is_first_iteration,
                 )
             else:
                 attention_mask = causal_mask_creation_function(
@@ -857,21 +866,30 @@ class GenerationMixin:
     def _extract_past_from_model_output(self, outputs: ModelOutput, standardize_cache_format: bool = False):
         past_key_values = None
         cache_name = "past_key_values"
-        if "past_key_values" in outputs:
-            past_key_values = outputs.past_key_values
-        elif "mems" in outputs:
-            past_key_values = outputs.mems
-        elif "past_buckets_states" in outputs:
-            past_key_values = outputs.past_buckets_states
-        elif "cache_params" in outputs:
-            past_key_values = outputs.cache_params
-            cache_name = "cache_params"
+        for possible_cache_name in ALL_CACHE_NAMES:
+            if possible_cache_name in outputs:
+                past_key_values = getattr(outputs, possible_cache_name)
+                cache_name = "past_key_values" if possible_cache_name in ("past_buckets_states", "mems") else possible_cache_name
+                break
 
         # Bloom fix: standardizes the cache format when requested
         if standardize_cache_format and hasattr(self, "_convert_to_standard_cache"):
             batch_size = outputs.logits.shape[0]
             past_key_values = self._convert_to_standard_cache(past_key_values, batch_size=batch_size)
         return cache_name, past_key_values
+
+    def _get_cache_name(self, container: Optional[dict[str, Any]] = None) -> str:
+        if container is not None:
+            cache_name = next((cache_key for cache_key in ALL_CACHE_NAMES if cache_key in container), None)
+            if cache_name is not None:
+                return cache_name
+
+        prepare_inputs_parameters = inspect.signature(self.prepare_inputs_for_generation).parameters
+        cache_name = next((cache_key for cache_key in ALL_CACHE_NAMES if cache_key in prepare_inputs_parameters), None)
+        if cache_name is not None:
+            return cache_name
+
+        return "past_key_values"
 
     def _prepare_model_inputs(
         self,
@@ -882,6 +900,8 @@ class GenerationMixin:
         """
         This function extracts the model-specific `inputs` for generation.
         """
+        model_kwargs = {} if model_kwargs is None else model_kwargs
+
         # 1. retrieve all kwargs that are non-None or non-model input related.
         # some encoder-decoder models have different names for model and encoder
         if (
@@ -901,7 +921,7 @@ class GenerationMixin:
         if inputs_kwarg is not None and inputs is not None:
             raise ValueError(
                 f"`inputs`: {inputs}` were passed alongside {input_name} which is not allowed. "
-                f"Make sure to either pass {inputs} or {input_name}=..."
+                f"Make sure to either pass `inputs` or `{input_name}=...`."
             )
         elif inputs_kwarg is not None:
             inputs = inputs_kwarg
@@ -949,6 +969,8 @@ class GenerationMixin:
         """Initializes input ids for generation, if necessary."""
         if inputs is not None:
             return inputs
+
+        model_kwargs = {} if model_kwargs is None else model_kwargs
 
         encoder_outputs = model_kwargs.get("encoder_outputs")
         if self.config.is_encoder_decoder and encoder_outputs is not None:
@@ -1000,12 +1022,10 @@ class GenerationMixin:
         is_pad_token_not_equal_to_eos_token_id = (eos_token_id is None) or ~(
             mnp.isin(element=eos_token_id, test_elements=pad_token_id).any()
         )
-        can_infer_attention_mask = is_pad_token_in_inputs * is_pad_token_not_equal_to_eos_token_id
+        can_infer_attention_mask = is_pad_token_in_inputs & is_pad_token_not_equal_to_eos_token_id
         attention_mask_from_padding = inputs_tensor.ne(pad_token_id).to(ms.int64)
 
-        attention_mask = (
-            attention_mask_from_padding * can_infer_attention_mask + default_attention_mask * ~can_infer_attention_mask
-        )
+        attention_mask = mint.where(can_infer_attention_mask, attention_mask_from_padding, default_attention_mask)
         return attention_mask
 
     def _prepare_encoder_decoder_kwargs_for_generation(
@@ -1116,6 +1136,7 @@ class GenerationMixin:
                     and isinstance(dict_to_expand[key], ms.Tensor)
                 ):
                     if dict_to_expand[key].dtype == ms.bool_:
+                        # MindSpore cannot safely repeat_interleave bool tensors in all paths, so expand via int32.
                         dict_to_expand[key] = (
                             dict_to_expand[key].to(ms.int32).repeat_interleave(expand_size, dim=0).to(ms.bool_)
                         )
@@ -1373,7 +1394,7 @@ class GenerationMixin:
             processors.append(
                 PrefixConstrainedLogitsProcessor(
                     prefix_allowed_tokens_fn,
-                    generation_config.num_beams,
+                    generation_config.num_beams or 1,
                 )
             )
         if generation_config.forced_bos_token_id is not None:
@@ -1382,7 +1403,7 @@ class GenerationMixin:
                     generation_config.forced_bos_token_id,
                 )
             )
-        if generation_config.forced_eos_token_id is not None:
+        if generation_config.forced_eos_token_id is not None and generation_config.max_length is not None:
             processors.append(
                 ForcedEOSTokenLogitsProcessor(
                     generation_config.max_length,
@@ -1425,7 +1446,7 @@ class GenerationMixin:
         if generation_config.do_sample:
             # In beam methods, we need to keep at least one non-eos token to explore continuations that might have a
             # better score (i.e. keep len(list(generation_config._eos_token_tensor)) + 1)
-            if generation_config.num_beams > 1:
+            if generation_config.num_beams is not None and generation_config.num_beams > 1:
                 if isinstance(generation_config._eos_token_tensor, list):
                     min_tokens_to_keep = len(generation_config._eos_token_tensor) + 1
                 elif isinstance(generation_config._eos_token_tensor, ms.Tensor):
@@ -1439,6 +1460,8 @@ class GenerationMixin:
             # all samplers can be found in `generation_utils_samplers.py`
             if generation_config.temperature is not None and generation_config.temperature != 1.0:
                 processors.append(TemperatureLogitsWarper(generation_config.temperature))
+            if generation_config.top_h is not None:
+                processors.append(TopHLogitsWarper(top_h=generation_config.top_h))
             if generation_config.top_k is not None and generation_config.top_k != 0:
                 processors.append(
                     TopKLogitsWarper(top_k=generation_config.top_k, min_tokens_to_keep=min_tokens_to_keep)
@@ -1702,7 +1725,7 @@ class GenerationMixin:
             )
 
         if generation_mode == GenerationMode.ASSISTED_GENERATION:
-            if generation_config.num_return_sequences > 1:
+            if generation_config.num_return_sequences is not None and generation_config.num_return_sequences > 1:
                 raise ValueError(
                     "num_return_sequences has to be 1 when doing assisted generate, "
                     f"but is {generation_config.num_return_sequences}."
@@ -1795,15 +1818,22 @@ class GenerationMixin:
 
     def _validate_generated_length(self, generation_config, input_ids_length, has_default_max_length):
         """Performs validation related to the resulting generated length"""
+        default_max_length = GenerationConfig._get_default_generation_params()["max_length"]
+
         # 1. Max length warnings related to poor parameterization
-        if has_default_max_length and generation_config.max_new_tokens is None and generation_config.max_length == 20:
-            # 20 is the default max_length of the generation config
+        if (
+            has_default_max_length
+            and generation_config.max_new_tokens is None
+            and generation_config.max_length == input_ids_length + default_max_length
+        ):
             warnings.warn(
                 f"Using the model-agnostic default `max_length` (={generation_config.max_length}) to control the "
                 "generation length. We recommend setting `max_new_tokens` to control the maximum length of the "
                 "generation.",
                 UserWarning,
             )
+        if generation_config.max_length is None:
+            return
         if input_ids_length >= generation_config.max_length:
             input_ids_string = "decoder_input_ids" if self.config.is_encoder_decoder else "input_ids"
             raise ValueError(
@@ -1821,7 +1851,11 @@ class GenerationMixin:
             min_length_error_suffix += (
                 f" Note that `max_length` is set to {generation_config.max_length}, its default value."
             )
-        if generation_config.min_length is not None and generation_config.min_length > generation_config.max_length:
+        if (
+            generation_config.min_length is not None
+            and generation_config.max_length is not None
+            and generation_config.min_length > generation_config.max_length
+        ):
             warnings.warn(
                 f"Unfeasible length constraints: `min_length` ({generation_config.min_length}) is larger than"
                 f" the maximum possible length ({generation_config.max_length})." + min_length_error_suffix,
@@ -1829,7 +1863,7 @@ class GenerationMixin:
             )
         if generation_config.min_new_tokens is not None:
             min_length = generation_config.min_new_tokens + input_ids_length
-            if min_length > generation_config.max_length:
+            if generation_config.max_length is not None and min_length > generation_config.max_length:
                 warnings.warn(
                     f"Unfeasible length constraints: `min_new_tokens` ({generation_config.min_new_tokens}), when "
                     f"added to the prompt length ({input_ids_length}), is larger than"
@@ -1847,6 +1881,8 @@ class GenerationMixin:
         inputs_tensor,
     ):
         """Prepared max and min length in generation configs to avoid clashes between similar attributes"""
+        default_generation_params = GenerationConfig._get_default_generation_params()
+        default_max_length = default_generation_params["max_length"]
 
         if generation_config.max_new_tokens is not None:
             if not has_default_max_length and generation_config.max_length is not None:
@@ -1864,14 +1900,14 @@ class GenerationMixin:
             model_input_name == "inputs_embeds"
             and input_ids_length != inputs_tensor.shape[1]
             and not self.config.is_encoder_decoder
+            and generation_config.max_length is not None
         ):
             generation_config.max_length -= inputs_tensor.shape[1]
-        elif has_default_max_length:  # by default let's always generate 20 new tokens
-            if generation_config.max_length == GenerationConfig().max_length:
-                generation_config.max_length = generation_config.max_length + input_ids_length
-                max_position_embeddings = getattr(self.config, "max_position_embeddings", None)
-                if max_position_embeddings is not None:
-                    generation_config.max_length = min(generation_config.max_length, max_position_embeddings)
+        elif generation_config.max_length is None or has_default_max_length:
+            generation_config.max_length = input_ids_length + default_max_length
+            max_position_embeddings = getattr(self.config, "max_position_embeddings", None)
+            if max_position_embeddings is not None:
+                generation_config.max_length = min(generation_config.max_length, max_position_embeddings)
 
         # same for min length
         if generation_config.min_new_tokens is not None:
@@ -1888,6 +1924,7 @@ class GenerationMixin:
             model_input_name == "inputs_embeds"
             and input_ids_length != inputs_tensor.shape[1]
             and not self.config.is_encoder_decoder
+            and generation_config.min_length is not None
         ):
             generation_config.min_length = max(generation_config.min_length - inputs_tensor.shape[1], 0)
 
@@ -1907,70 +1944,83 @@ class GenerationMixin:
         # kwargs > non-global default values in `generation_config` > `model.generation_config` > GenerationConfig()
         # TODO (joao): per-model generation config classes.
 
-        using_model_generation_config = False
+        generation_config_provided = generation_config is not None
         if generation_config is None:
-            # legacy: users may modify the model configuration to control generation. To trigger this legacy behavior,
-            # the following conditions must be met
-            # 1) the generation config must have been created from the model config (`_from_model_config` field);
-            # 2) the generation config must have seen no modification since its creation (the hash is the same);
-            # 3) there are non-default generation parameters in the model config.
-            # 4) the user must have set new generation parameters in the model config.
-            if (
-                self.generation_config._from_model_config  # 1)
-                and self.generation_config._original_object_hash == hash(self.generation_config)  # 2)
-                and len(self.config._get_non_default_generation_parameters()) > 0  # 3)
-            ):
-                new_generation_config = GenerationConfig.from_model_config(self.config)
-                if new_generation_config != self.generation_config:  # 4)
-                    warnings.warn(
-                        "You have modified the pretrained model configuration to control generation. This is a"
-                        " deprecated strategy to control generation and will be removed in v5."
-                        " Please use and modify the model generation configuration (see"
-                        " https://huggingface.co/docs/transformers/generation_strategies#default-text-generation-configuration )",
-                        UserWarning,
+            get_generation_parameters = getattr(self.config, "_get_generation_parameters", None)
+            if callable(get_generation_parameters):
+                generation_parameters = get_generation_parameters()
+                if len(generation_parameters) > 0:
+                    raise ValueError(
+                        "You have modified the pretrained model configuration to control generation "
+                        f"We detected the following values set - {generation_parameters}. "
+                        "This strategy to control generation is not supported anymore. Please use and modify "
+                        "`model.generation_config` "
+                        "(see https://huggingface.co/docs/transformers/generation_strategies#default-text-generation-configuration )"
                     )
-                    self.generation_config = new_generation_config
+            else:
+                # legacy: users may modify the model configuration to control generation. To trigger this legacy behavior,
+                # the following conditions must be met
+                # 1) the generation config must have been created from the model config (`_from_model_config` field);
+                # 2) the generation config must have seen no modification since its creation (the hash is the same);
+                # 3) there are non-default generation parameters in the model config.
+                # 4) the user must have set new generation parameters in the model config.
+                if (
+                    self.generation_config._from_model_config  # 1)
+                    and self.generation_config._original_object_hash == hash(self.generation_config)  # 2)
+                    and len(self.config._get_non_default_generation_parameters()) > 0  # 3)
+                ):
+                    new_generation_config = GenerationConfig.from_model_config(self.config)
+                    if new_generation_config != self.generation_config:  # 4)
+                        warnings.warn(
+                            "You have modified the pretrained model configuration to control generation. This is a"
+                            " deprecated strategy to control generation and will be removed in v5."
+                            " Please use and modify the model generation configuration (see"
+                            " https://huggingface.co/docs/transformers/generation_strategies#default-text-generation-configuration )",
+                            UserWarning,
+                        )
+                        self.generation_config = new_generation_config
 
-            generation_config = self.generation_config
-            using_model_generation_config = True
-
-            # Related to #40039: prior to this PR, models with sliding window attention were forced to have
-            # `cache_implementation="hybrid"` (the static sliding window cache). For these models, we now want to use
-            # the dynamic sliding window cache by default, so we UNSET `cache_implementation` if it is a default value.
-            # (if we're inside this branch, then it is because we're using default values from the Hub)
-            if generation_config.cache_implementation == "hybrid":
-                generation_config.cache_implementation = None
+            generation_config = GenerationConfig()
 
         # `torch.export.export` usually raises an exception if it is called
         # with ``strict=True``. deepcopy can only be processed if ``strict=False``.
         generation_config = copy.deepcopy(generation_config)
 
-        if not using_model_generation_config:
+        if not generation_config_provided:
+            global_defaults = self.generation_config._get_default_generation_params()
+            generation_config.update(**self.generation_config.to_dict(), defaults_only=True, allow_custom_entries=True)
+            generation_config.update(**global_defaults, defaults_only=True)
+        else:
             # If `generation_config` is provided:
             # - `use_model_defaults`: let's fallback ALL default values to the model's generation config
             # - otherwise: legacy behavior, let's just make sure we have the tokens defined
-            model_base_version = version.parse(version.parse(self.generation_config.transformers_version).base_version)
+            model_generation_version = self.generation_config.transformers_version
+            model_base_version = (
+                version.parse(version.parse(model_generation_version).base_version)
+                if model_generation_version is not None
+                else version.parse("0.0.0")
+            )
             if use_model_defaults is True or (
                 use_model_defaults is None and model_base_version >= version.parse("4.50.0")
             ):
                 modified_values = {}
-                global_default_generation_config = GenerationConfig()
                 model_generation_config = self.generation_config
-                # we iterate over the model's generation config: it may hold custom keys, which we'll want to copy
-                for key, model_gen_config_value in model_generation_config.__dict__.items():
-                    if key.startswith("_") or key == "transformers_version":  # metadata
+                model_generation_config_dict = model_generation_config.to_dict()
+                if model_generation_config.cache_implementation == "hybrid":
+                    model_generation_config_dict.pop("cache_implementation", None)
+
+                global_defaults = GenerationConfig._get_default_generation_params()
+                for key, value in global_defaults.items():
+                    model_generation_config_dict.setdefault(key, value)
+
+                for key, current_value in generation_config.to_dict().items():
+                    if key.startswith("_") or key == "transformers_version":
                         continue
-                    # Don't set `cache_implementation = 'hybrid'` from the model defaults, see #40135
-                    if key == "cache_implementation" and model_generation_config.cache_implementation == "hybrid":
-                        continue
-                    global_default_value = getattr(global_default_generation_config, key, None)
-                    custom_gen_config_value = getattr(generation_config, key, None)
-                    if (
-                        custom_gen_config_value == global_default_value
-                        and model_gen_config_value != global_default_value
-                    ):
-                        modified_values[key] = model_gen_config_value
-                        setattr(generation_config, key, model_gen_config_value)
+                    model_value = model_generation_config_dict.get(key, None)
+                    if current_value == global_defaults.get(key, None) and model_value != global_defaults.get(key, None):
+                        modified_values[key] = model_value
+
+                generation_config.update(**model_generation_config_dict, defaults_only=True, allow_custom_entries=True)
                 # edge case: we may set `temperature=0.0` and `do_sample=False`, but the model defaults to
                 # `do_sample=True`
                 if generation_config.temperature == 0.0:
@@ -1987,11 +2037,26 @@ class GenerationMixin:
                     generation_config.eos_token_id = self.generation_config.eos_token_id
                 if generation_config.pad_token_id is None:
                     generation_config.pad_token_id = self.generation_config.pad_token_id
-                if generation_config.decoder_start_token_id is None:
-                    generation_config.decoder_start_token_id = self.generation_config.decoder_start_token_id
+                    if generation_config.decoder_start_token_id is None:
+                        generation_config.decoder_start_token_id = self.generation_config.decoder_start_token_id
+
+        # Related to #40039: prior to this PR, models with sliding window attention were forced to have
+        # `cache_implementation="hybrid"` (the static sliding window cache). For these models, we now want to use
+        # the dynamic sliding window cache by default, so we UNSET `cache_implementation` if it is a default value.
+        if generation_config.cache_implementation == "hybrid":
+            generation_config.cache_implementation = None
+
+        generation_config.update(**GenerationConfig._get_default_generation_params(), defaults_only=True)
 
         # Finally, apply any passed kwargs
         model_kwargs = generation_config.update(**kwargs)
+        if generation_config_provided and set(kwargs.keys()) - set(model_kwargs.keys()):
+            generation_kwargs = set(kwargs.keys()) - set(model_kwargs.keys())
+            logger.warning_once(
+                f"Passing `generation_config` together with generation-related "
+                f"arguments=({generation_kwargs}) is deprecated and will be removed in future versions. "
+                "Please pass either a `generation_config` object OR all generation parameters explicitly, but not both."
+            )
         # And keep in model_kwargs variable output controls
         output_attentions = generation_config.output_attentions
         output_hidden_states = generation_config.output_hidden_states
@@ -2014,9 +2079,9 @@ class GenerationMixin:
             cache_position = mint.ones(seq_length, dtype=ms.int64).cumsum(0) - 1
 
         past_length = 0
-        if model_kwargs.get("past_key_values") is not None:
-            cache = model_kwargs["past_key_values"]
-            past_length = 0
+        cache_name = self._get_cache_name(model_kwargs)
+        cache = model_kwargs.get(cache_name)
+        if cache is not None:
             # Support for BC tuple cache format
             if isinstance(cache, tuple):
                 past_length = cache[0][0].shape[2]
@@ -2079,17 +2144,19 @@ class GenerationMixin:
             self._cache.reset()
         return self._cache
 
-    @classmethod
-    def _supports_default_dynamic_cache(cls) -> bool:
+    def _supports_default_dynamic_cache(self) -> bool:
         """
         Return `True` if current model can use a `DynamicCache` instance when initializing the `past_key_values`.
         This adds exception for some models like `Mamba` models which use their own caches
         and do not need to initialize the Cache in advance in order to save memory (because no back and forth
         `to_legacy_cache` and `from_legacy_cache` will be performed for mamba-based models).
         """
+        if self._get_cache_name() != "past_key_values":
+            return False
+
         # NOTE: remove xlnet/reformer when the models are deprecated, non-standard model architecture/cache name
-        return not cls._is_stateful and all(
-            special_model_name not in cls.__name__.lower()
+        return not self.__class__._is_stateful and all(
+            special_model_name not in self.__class__.__name__.lower()
             for special_model_name in [
                 "reformer",
                 "minimax",
@@ -2106,22 +2173,19 @@ class GenerationMixin:
         generation_mode: GenerationMode,
         batch_size: int,
         max_cache_length: int,
-    ) -> bool:
+    ) -> None:
         """
         Prepares the cache for generation (if applicable), given `generate`'s parameterization. If a cache is
         instantiated, writes it to `model_kwargs`, under the name expected by the model.
         """
-        # fixme is_hybrid_cache is never used
-        # is_hybrid_cache = any(class_name in self.__class__.__name__.lower() for class_name in ["mamba", "falconh1"])
-        cache_name = "past_key_values" if "mamba" not in self.__class__.__name__.lower() else "cache_params"
+        cache_name = self._get_cache_name()
 
         requires_cross_attention_cache = (
             self.config.is_encoder_decoder or model_kwargs.get("encoder_outputs") is not None
         )
 
-        # Quick escape route 1: if the user specifies a cache, we only need to:
-        # a) check for conflicting `generate` arguments
-        # b) convert to the new cache format (if the user passes a legacy cache and model supports it)
+        # Quick escape route 1: if the user specifies a cache, we only need to check for conflicting `generate`
+        # arguments.
         user_defined_cache = model_kwargs.get(cache_name)
         if user_defined_cache is not None:
             if generation_config.cache_implementation is not None:
@@ -2129,15 +2193,9 @@ class GenerationMixin:
                     f"Passing both `cache_implementation` (used to initialize certain caches) and `{cache_name}` (a "
                     "Cache object) is unsupported. Please use only one of the two."
                 )
-            if isinstance(user_defined_cache, tuple) and self._supports_default_dynamic_cache():
-                logger.warning_once(
-                    "Passing a tuple of `past_key_values` is deprecated and will be removed in Transformers v4.58.0. "
-                    "You should pass an instance of `Cache` instead."
-                )
-                model_kwargs[cache_name] = (
-                    DynamicCache.from_legacy_cache(user_defined_cache)
-                    if not requires_cross_attention_cache
-                    else EncoderDecoderCache.from_legacy_cache(user_defined_cache)
+            if isinstance(user_defined_cache, tuple):
+                raise ValueError(
+                    "Passing a tuple of `past_key_values` is not supported anymore. Please use a `Cache` instance."
                 )
             return
 
@@ -2146,8 +2204,8 @@ class GenerationMixin:
         if generation_config.use_cache is False:
             return
 
-        # Quick escape route 3: model that only supports legacy caches. Prepare a static legacy cache
-        # This is the case for most models currently.
+        # Quick escape route 3: model families that manage cache initialization in
+        # `prepare_inputs_for_generation()` (for example mamba-style caches).
         if not self._supports_default_dynamic_cache():
             if generation_config.cache_implementation is not None:
                 logger.warning_once(
@@ -2187,35 +2245,50 @@ class GenerationMixin:
                     )
                 model_kwargs[cache_name] = self._get_cache(
                     cache_implementation=generation_config.cache_implementation,
-                    batch_size=max(generation_config.num_beams, generation_config.num_return_sequences) * batch_size,
+                    batch_size=max(generation_config.num_beams or 1, generation_config.num_return_sequences or 1)
+                    * batch_size,
                     max_cache_len=max_cache_length,
                     model_kwargs=model_kwargs,
                 )
             elif generation_config.cache_implementation == "quantized":
+                if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
+                    raise ValueError(
+                        "This model does not support the quantized cache. If you want your model to support quantized "
+                        "cache, please open an issue and tag @zucchini-nlp."
+                    )
                 if not self._supports_quantized_cache:
                     raise ValueError(
                         "This model does not support the quantized cache. If you want your model to support quantized "
                         "cache, please open an issue and tag @zucchini-nlp."
                     )
-                raise NotImplementedError
+                raise ValueError(
+                    "`cache_implementation='quantized'` is not implemented in MindOne generation yet."
+                )
             elif generation_config.cache_implementation == "offloaded":
-                raise NotImplementedError
+                if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
+                    raise ValueError(
+                        "This model does not support the offloaded cache in generation."
+                    )
+                raise ValueError(
+                    "`cache_implementation='offloaded'` is not implemented in MindOne generation yet."
+                )
             elif "dynamic" in generation_config.cache_implementation:
                 model_kwargs[cache_name] = DynamicCache(**dynamic_cache_kwargs)
-
-        # Use DynamicCache instance by default. This will avoid back and forth from legacy format that
-        # keeps copying the cache thus using much more memory
-        # TODO (joao): remove this `else` when we remove the last traces of the legacy cache format (v4.58.0, search
-        # for `instance(past_key_values, Cache)` as well). In general, if `cache_implementation` is unset, cache
-        # initialization should happen inside the model at prefill time.
-        else:
-            model_kwargs[cache_name] = DynamicCache(**dynamic_cache_kwargs)
+            else:
+                raise ValueError(
+                    f"Unsupported `cache_implementation`: {generation_config.cache_implementation!r}."
+                )
 
         # TODO (joao): this logic is incomplete, e.g. `offloaded` should apply to both caches. Refactor this function
         # to correctly pass parameterization to both caches.
-        if requires_cross_attention_cache and not isinstance(model_kwargs[cache_name], EncoderDecoderCache):
-            model_kwargs[cache_name] = EncoderDecoderCache(
-                model_kwargs[cache_name],  # self-attention cache
+        if (
+            requires_cross_attention_cache
+            and cache_name == "past_key_values"
+            and model_kwargs.get("past_key_values") is not None
+            and not isinstance(model_kwargs["past_key_values"], EncoderDecoderCache)
+        ):
+            model_kwargs["past_key_values"] = EncoderDecoderCache(
+                model_kwargs["past_key_values"],  # self-attention cache
                 DynamicCache(**dynamic_cache_kwargs),  # cross-attention cache
             )
 
@@ -2308,9 +2381,9 @@ class GenerationMixin:
 
         # Base logic
         valid_hardware = bool(generation_config.compile_config is not None)
-        using_compilable_cache = (
-            isinstance(model_kwargs.get("past_key_values"), Cache) and model_kwargs["past_key_values"].is_compileable
-        )
+        cache_name = self._get_cache_name(model_kwargs)
+        cache = model_kwargs.get(cache_name)
+        using_compilable_cache = isinstance(cache, Cache) and cache.is_compileable
         # TODO @raushan `self._can_compile_fullgraph` can be removed and inferred from model arch (e.g. MoE doesn't support compile)
         can_compile = valid_hardware and using_compilable_cache
 
@@ -2519,13 +2592,21 @@ class GenerationMixin:
             streamer,
         )
 
+        # Check length values before updating the config with defaults. We'll use it later to define the final min/max length.
+        has_default_max_length = kwargs.get("max_length") is None and (
+            generation_config is None or generation_config.max_length is None
+        )
+        has_default_min_length = kwargs.get("min_length") is None and (
+            generation_config is None or generation_config.min_length is None
+        )
         generation_config, model_kwargs = self._prepare_generation_config(
             generation_config, use_model_defaults, **kwargs
         )
         generation_mode = generation_config.get_generation_mode(assistant_model)
+        deprecated_mode_repo = self._get_deprecated_gen_repo(generation_mode, trust_remote_code, custom_generate)
         if isinstance(custom_generate, Callable):
             decoding_method = custom_generate
-        else:
+        elif deprecated_mode_repo is None:
             # type() required to access the unbound class-level method
             decoding_method = getattr(type(self), GENERATION_MODES_MAPPING[generation_mode])
 
@@ -2536,7 +2617,7 @@ class GenerationMixin:
         # NOTE: This must come after initializing generation_config, since we need it to determine if this is a deprecated mode.
         # It must also be before any preparation steps, since Hub repos expect to be loaded before preparation steps.
         # TODO joao, manuel: remove this in v4.62.0
-        if deprecated_mode_repo := self._get_deprecated_gen_repo(generation_mode, trust_remote_code, custom_generate):
+        if deprecated_mode_repo is not None:
             return GenerationMixin.generate(
                 self,
                 inputs=inputs,
@@ -2623,7 +2704,7 @@ class GenerationMixin:
         # Expand inputs depending on the generation mode
         input_ids, model_kwargs = self._expand_inputs_for_generation(
             input_ids=input_ids,
-            expand_size=max(generation_config.num_beams, generation_config.num_return_sequences),
+            expand_size=max(generation_config.num_beams or 1, generation_config.num_return_sequences or 1),
             is_encoder_decoder=self.config.is_encoder_decoder,
             **model_kwargs,
         )
@@ -2636,8 +2717,6 @@ class GenerationMixin:
 
         # 6. Prepare `max_length` depending on other stopping criteria.
         input_ids_length = input_ids.shape[1]
-        has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
-        has_default_min_length = kwargs.get("min_length") is None and generation_config.min_length is not None
         generation_config = self._prepare_generated_length(
             generation_config=generation_config,
             has_default_max_length=has_default_max_length,
@@ -2704,6 +2783,7 @@ class GenerationMixin:
         # Convert to legacy cache format if requested
         if (
             generation_config.return_legacy_cache is True
+            and self._get_cache_name() == "past_key_values"
             and hasattr(result, "past_key_values")
             and getattr(result.past_key_values, "to_legacy_cache") is not None
         ):
@@ -2908,14 +2988,15 @@ class GenerationMixin:
 
         multinomial = get_multinomial_op()
         step = 0
-        s_time = time.time()
-        graph_compiled_time_buffer = []
+        is_first_iteration = True
 
         while self._has_unfinished_sequences(this_peer_finished, synced_gpus):
             # prepare model inputs
             if "paged" in self.config._attn_implementation:
                 model_kwargs["step"] = step
-            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+            model_inputs = self.prepare_inputs_for_generation(
+                input_ids, is_first_iteration=is_first_iteration, **model_kwargs
+            )
 
             # forward pass to get next token
             if is_prefill:
@@ -2931,11 +3012,13 @@ class GenerationMixin:
                 )
 
             if not isinstance(outputs, ModelOutput):
-                outputs = ModelOutput(
-                    loss=None,
-                    logits=outputs[0],
-                    past_key_values=outputs[1] if model_inputs.get("use_cache", False) else None,
-                )
+                output_kwargs = {"loss": None, "logits": outputs[0]}
+                if model_inputs.get("use_cache", False) and len(outputs) > 1:
+                    cache_name = self._get_cache_name(model_inputs)
+                    if cache_name not in model_inputs:
+                        cache_name = self._get_cache_name(model_kwargs)
+                    output_kwargs[cache_name] = outputs[1]
+                outputs = ModelOutput(**output_kwargs)
 
             if model_kwargs.get("attention_mask", None) is None:
                 next_token_logits = outputs.logits[:, -1, :]
@@ -2961,17 +3044,8 @@ class GenerationMixin:
             if synced_gpus and this_peer_finished:
                 continue
 
-            step_time = time.time() - s_time
-            if step < 2:
-                print(f"==> sampling, step: {step}, time cost: {step_time:.5f}s")
-            else:
-                graph_compiled_time_buffer.append(step_time)
-                token_speed = len(graph_compiled_time_buffer) / sum(graph_compiled_time_buffer)
-                print(
-                    f"==> sampling, step: {step}, time cost: {step_time:.5f}s, running avg speed: {token_speed:.5f}token/s"
-                )
-            s_time = time.time()
             step += 1
+            is_first_iteration = False
 
             # pre-process distribution
             next_token_scores = logits_processor(input_ids, next_token_logits)
@@ -3022,6 +3096,7 @@ class GenerationMixin:
             streamer.end()
 
         if return_dict_in_generate:
+            cache = model_kwargs.get(self._get_cache_name(model_kwargs))
             if self.config.is_encoder_decoder:
                 return GenerateEncoderDecoderOutput(
                     sequences=input_ids,
@@ -3032,7 +3107,7 @@ class GenerationMixin:
                     decoder_attentions=decoder_attentions,
                     cross_attentions=cross_attentions,
                     decoder_hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
+                    past_key_values=cache,
                 )
             else:
                 return GenerateDecoderOnlyOutput(
@@ -3041,7 +3116,7 @@ class GenerationMixin:
                     logits=raw_logits,
                     attentions=decoder_attentions,
                     hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
+                    past_key_values=cache,
                 )
         else:
             return input_ids
@@ -3442,14 +3517,18 @@ class GenerationMixin:
         # per batch selected beam indices
         running_beam_indices = mint.full((batch_size, num_beams, max_length - cur_len), fill_value=-1, dtype=ms.int32)
         beam_indices = running_beam_indices.copy()  # .detach()
+        is_first_iteration = True
 
         # 4. run the generation loop
         while self._has_unfinished_sequences(this_peer_finished, synced_gpus):
             # a. Forward current tokens, obtain the logits
             flat_running_sequences = self._flatten_beam_dim(running_sequences[:, :, :cur_len])
-            model_inputs = self.prepare_inputs_for_generation(flat_running_sequences, **model_kwargs)
+            model_inputs = self.prepare_inputs_for_generation(
+                flat_running_sequences, is_first_iteration=is_first_iteration, **model_kwargs
+            )
 
             model_outputs = self(**model_inputs, return_dict=True)
+            is_first_iteration = False
 
             # synced_gpus: don't waste resources running the code we don't need; kwargs must be updated before skipping
             model_kwargs = self._update_model_kwargs_for_generation(
@@ -3555,12 +3634,14 @@ class GenerationMixin:
 
             # pluck the cache from the beam indices that will be used in the next iteration
             # NOTE: we need to check if `self._reorder_cache` exists for special models like RAG, RecurrentGemma etc.
-            if model_kwargs.get("past_key_values", None) is not None:
+            cache_name = self._get_cache_name(model_kwargs)
+            cache = model_kwargs.get(cache_name)
+            if cache is not None:
                 beam_idx = self._flatten_beam_dim(running_beam_indices[..., cur_len - decoder_prompt_len])
                 if hasattr(self, "_reorder_cache"):
-                    model_kwargs["past_key_values"] = self._reorder_cache(model_kwargs["past_key_values"], beam_idx)
+                    model_kwargs[cache_name] = self._reorder_cache(cache, beam_idx)
                 else:
-                    model_kwargs["past_key_values"].reorder_cache(beam_idx)
+                    cache.reorder_cache(beam_idx)
 
             cur_len = cur_len + 1
             is_early_stop_heuristic_unsatisfied = self._check_early_stop_heuristic(
@@ -3599,6 +3680,7 @@ class GenerationMixin:
         if return_dict_in_generate:
             if not output_scores:
                 beam_scores = None
+            cache = model_kwargs.get(self._get_cache_name(model_kwargs))
 
             if self.config.is_encoder_decoder:
                 return GenerateBeamEncoderDecoderOutput(
@@ -3612,7 +3694,7 @@ class GenerationMixin:
                     decoder_attentions=decoder_attentions,
                     cross_attentions=cross_attentions,
                     decoder_hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
+                    past_key_values=cache,
                 )
             else:
                 return GenerateBeamDecoderOnlyOutput(
@@ -3623,7 +3705,7 @@ class GenerationMixin:
                     beam_indices=beam_indices,
                     attentions=decoder_attentions,
                     hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
+                    past_key_values=cache,
                 )
         else:
             return sequences
@@ -3688,10 +3770,12 @@ class GenerationMixin:
         # The cache must be dynamic for assisted generation, and the check must happen AFTER preparing cache
         if not model_kwargs["use_cache"]:
             raise ValueError("assisted generate requires `use_cache=True`")
+        cache_name = self._get_cache_name(model_kwargs)
+        cache = model_kwargs.get(cache_name) if cache_name is not None else None
         if generation_config.cache_implementation in ["static", "hybrid", "sliding_window"] or (
-            "past_key_values" in model_kwargs
-            and hasattr(model_kwargs["past_key_values"], "layers")
-            and any(getattr(layer, "is_compileable", False) for layer in model_kwargs["past_key_values"].layers)
+            cache is not None
+            and hasattr(cache, "layers")
+            and any(getattr(layer, "is_compileable", False) for layer in cache.layers)
         ):
             raise ValueError("assisted generate is not supported with Static cache classes`")
         # Get the candidate generator, given the parameterization
@@ -3740,7 +3824,7 @@ class GenerationMixin:
             cur_len = input_ids.shape[1]
 
             #  1. Fetch candidate sequences from a `CandidateGenerator` and move to the correct device
-            candidate_input_ids, candidate_logits = candidate_generator.get_candidates(input_ids)
+            candidate_input_ids, candidate_logits = candidate_generator.get_candidates(input_ids, is_first_iteration)
 
             candidate_length = candidate_input_ids.shape[1] - input_ids.shape[1]
             is_done_candidate = stopping_criteria(candidate_input_ids, None)
@@ -3764,7 +3848,9 @@ class GenerationMixin:
                     dim=0,
                 )
 
-            model_inputs = self.prepare_inputs_for_generation(candidate_input_ids, **candidate_kwargs)
+            model_inputs = self.prepare_inputs_for_generation(
+                candidate_input_ids, is_first_iteration=is_first_iteration, **candidate_kwargs
+            )
             if "logits_to_keep" in model_inputs:
                 model_inputs["logits_to_keep"] = candidate_length + 1
 
@@ -3820,11 +3906,15 @@ class GenerationMixin:
             # 4.1. Get the valid continuation, after the matching tokens
             input_ids = mint.cat((input_ids, valid_tokens), dim=-1)
             if streamer is not None:
-                streamer.put(valid_tokens.cpu())
+                streamer.put(valid_tokens.asnumpy())
             new_cur_len = input_ids.shape[1]
 
             # 4.2. Discard past key values relative to unused assistant tokens
-            outputs.past_key_values.crop(new_cur_len - 1)
+            cache_name = self._get_cache_name(outputs)
+            if cache_name in outputs:
+                cache = getattr(outputs, cache_name)
+                if hasattr(cache, "crop"):
+                    cache.crop(new_cur_len - 1)
 
             # 5. Update the candidate generation strategy if needed
             candidate_generator.update_candidate_strategy(input_ids, new_logits, n_matches)
@@ -3888,13 +3978,12 @@ class GenerationMixin:
             streamer.end()
 
         if (
-            hasattr(candidate_generator, "assistant_model")
-            and candidate_generator.assistant_model.generation_config.num_assistant_tokens_schedule == "heuristic"
+            hasattr(candidate_generator, "assistant_generation_config")
+            and candidate_generator.assistant_generation_config.num_assistant_tokens_schedule == "heuristic"
         ):
-            candidate_generator.assistant_model.generation_config.num_assistant_tokens = (
-                candidate_generator.num_assistant_tokens
-            )
+            candidate_generator.assistant_generation_config.num_assistant_tokens = candidate_generator.num_assistant_tokens
         if return_dict_in_generate:
+            cache = model_kwargs.get(self._get_cache_name(model_kwargs))
             if self.config.is_encoder_decoder:
                 return GenerateEncoderDecoderOutput(
                     sequences=input_ids,
@@ -3905,7 +3994,7 @@ class GenerationMixin:
                     decoder_attentions=decoder_attentions,
                     cross_attentions=cross_attentions,
                     decoder_hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
+                    past_key_values=cache,
                 )
             else:
                 return GenerateDecoderOnlyOutput(
@@ -3914,7 +4003,7 @@ class GenerationMixin:
                     logits=raw_logits,
                     attentions=decoder_attentions,
                     hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
+                    past_key_values=cache,
                 )
         else:
             return input_ids
@@ -3925,7 +4014,8 @@ class GenerationMixin:
         # (here we simply prefill the cache)
         input_chunks = mint.split(input_ids[:, :-1], chunk_size, dim=-1)
 
-        if "past_key_values" not in model_kwargs:
+        cache_name = self._get_cache_name(model_kwargs)
+        if model_kwargs.get(cache_name) is None:
             raise ValueError("Cannot use prefill chunking without a cache")
 
         model_forward = self.construct
@@ -3944,11 +4034,17 @@ class GenerationMixin:
                 model_kwargs["attention_mask"] = attention_mask[:, :current_length]
             model_kwargs["cache_position"] = mint.arange(past_length, current_length, dtype=ms.int64)
             model_kwargs["position_ids"] = model_kwargs["cache_position"].unsqueeze(0)
-            model_inputs = self.prepare_inputs_for_generation(input_chunk, **model_kwargs)
+            model_inputs = self.prepare_inputs_for_generation(
+                input_chunk, is_first_iteration=(past_length == 0), **model_kwargs
+            )
 
             outputs = model_forward(**model_inputs, return_dict=True)
 
-            model_kwargs["past_key_values"] = outputs.past_key_values
+            for possible_cache_name in ALL_CACHE_NAMES:
+                if possible_cache_name in outputs:
+                    cache_name = "past_key_values" if possible_cache_name in ("past_buckets_states", "mems") else possible_cache_name
+                    model_kwargs[cache_name] = getattr(outputs, possible_cache_name)
+                    break
             past_length = current_length
 
         model_kwargs["attention_mask"] = attention_mask

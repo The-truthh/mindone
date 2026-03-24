@@ -30,7 +30,10 @@ from packaging import version
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module, resolve_trust_remote_code
 from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.tokenization_python import TOKENIZER_CONFIG_FILE
+try:
+    from transformers.tokenization_python import TOKENIZER_CONFIG_FILE
+except ImportError:
+    from transformers.tokenization_utils_base import TOKENIZER_CONFIG_FILE
 from transformers.utils import cached_file
 
 from ...feature_extraction_utils import FeatureExtractionMixin

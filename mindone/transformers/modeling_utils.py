@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, MutableMapping, Optional, Union
 
-# v5.0.0: is_offline_mode now from huggingface_hub
 from huggingface_hub import is_offline_mode
 
 from transformers.configuration_utils import PretrainedConfig

@@ -15,14 +15,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .beam_search import BeamHypotheses, BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
 from .candidate_generator import (
     AssistedCandidateGenerator,
     CandidateGenerator,
     EarlyExitCandidateGenerator,
     PromptLookupCandidateGenerator,
 )
-from .configuration_utils import CompileConfig
+from .configuration_utils import (
+    BaseWatermarkingConfig,
+    CompileConfig,
+    GenerationConfig,
+    GenerationMode,
+    SynthIDTextWatermarkingConfig,
+    WatermarkingConfig,
+)
 from .logits_process import (
     AlternatingCodebooksLogitsProcessor,
     ClassifierFreeGuidanceLogitsProcessor,
@@ -50,6 +56,7 @@ from .logits_process import (
     SuppressTokensLogitsProcessor,
     SynthIDTextWatermarkLogitsProcessor,
     TemperatureLogitsWarper,
+    TopHLogitsWarper,
     TopKLogitsWarper,
     TopPLogitsWarper,
     TypicalLogitsWarper,
@@ -73,4 +80,11 @@ from .utils import (
     GenerateDecoderOnlyOutput,
     GenerateEncoderDecoderOutput,
     GenerationMixin,
+)
+from .watermarking import (
+    BayesianDetectorConfig,
+    BayesianDetectorModel,
+    SynthIDTextWatermarkDetector,
+    WatermarkDetector,
+    WatermarkDetectorOutput,
 )
