@@ -317,7 +317,7 @@ from . import (
 )
 
 if version.parse(transformers.__version__) >= version.parse("4.51.0"):
-    from . import qwen3, qwen3_moe
+    from . import qwen3_moe
 
 if version.parse(transformers.__version__) >= version.parse("4.51.3"):
     from . import glm4
