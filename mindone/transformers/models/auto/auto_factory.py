@@ -804,7 +804,10 @@ class _LazyAutoMapping(OrderedDict):
     def _load_attr_from_module(self, model_type, attr):
         module_name = model_type_to_module_name(model_type)
         if "Config" in attr:
-            self._modules[module_name] = importlib.import_module(f".{module_name}", "transformers.models")
+            try:
+                self._modules[module_name] = importlib.import_module(f".{module_name}", "mindone.transformers.models")
+            except Exception:
+                self._modules[module_name] = importlib.import_module(f".{module_name}", "transformers.models")
         else:
             sub_path = os.path.abspath(os.path.dirname(__file__))
             sub_path = str(Path(sub_path).parent.parent.parent.parent)
