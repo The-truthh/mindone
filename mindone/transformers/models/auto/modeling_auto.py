@@ -1464,14 +1464,9 @@ MODEL_FOR_AUDIO_TOKENIZATION_NAMES = OrderedDict(
 if version.parse(transformers.__version__) >= version.parse("4.51.0"):
     MODEL_MAPPING_NAMES.update({"qwen3_moe": "Qwen3MoeModel"})
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.update({"qwen3_moe": "Qwen3MoeForCausalLM"})
-    MODEL_MAPPING_NAMES.update({"qwen3": "Qwen3Model"})
-    MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.update({"qwen3": "Qwen3ForCausalLM"})
     MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.update({"qwen3_moe": "Qwen3MoeForSequenceClassification"})
-    MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.update({"qwen3": "Qwen3ForSequenceClassification"})
     MODEL_FOR_QUESTION_ANSWERING_MAPPING_NAMES.update({"qwen3_moe": "Qwen3MoeForQuestionAnswering"})
-    MODEL_FOR_QUESTION_ANSWERING_MAPPING_NAMES.update({"qwen3": "Qwen3ForQuestionAnswering"})
     MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES.update({"qwen3_moe": "Qwen3MoeForTokenClassification"})
-    MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES.update({"qwen3": "Qwen3ForTokenClassification"})
 
 if version.parse(transformers.__version__) >= version.parse("4.51.3"):
     MODEL_MAPPING_NAMES.update({"glm4": "Glm4Model"})
