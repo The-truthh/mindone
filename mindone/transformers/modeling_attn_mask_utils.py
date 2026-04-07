@@ -450,6 +450,11 @@ def _prepare_4d_causal_attention_mask_for_sdpa(
         )
     else:
         if attention_mask.dim() == 4:
+            expected_shape = (input_shape[0], 1, input_shape[1], key_value_length)
+            if tuple(attention_mask.shape) != expected_shape:
+                raise ValueError(
+                    f"Incorrect 4D attention_mask shape: {tuple(attention_mask.shape)}; expected: {expected_shape}."
+                )
             expanded_4d_mask = attention_mask
         else:
             expanded_4d_mask = attn_mask_converter.to_4d(
@@ -483,6 +488,8 @@ def _prepare_4d_attention_mask(mask: ms.Tensor, dtype: ms.Type, tgt_len: Optiona
         tgt_len (`int`):
             The target length or query length the created mask shall have.
     """
+    if mask.dim() != 2:
+        raise ValueError(f"Expected a 2D attention mask, but got shape {tuple(mask.shape)}.")
     return _expand_mask(mask=mask, dtype=dtype, tgt_len=tgt_len)
 
 
@@ -499,6 +506,8 @@ def _prepare_4d_attention_mask_for_sdpa(mask: ms.Tensor, dtype: ms.Type, tgt_len
         tgt_len (`int`):
             The target length or query length the created mask shall have.
     """
+    if mask.dim() != 2:
+        raise ValueError(f"Expected a 2D attention mask, but got shape {tuple(mask.shape)}.")
     _, key_value_length = mask.shape
     tgt_len = tgt_len if tgt_len is not None else key_value_length
 

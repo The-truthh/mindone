@@ -66,6 +66,15 @@ def causal_mask_function(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int)
     return kv_idx <= q_idx
 
 
+def bidirectional_mask_function(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+    """
+    This creates a full bidirectional mask.
+
+    NOTE: It is important to keep an index-based version for non-vmap expansion.
+    """
+    return q_idx >= 0
+
+
 def sliding_window_overlay(sliding_window: int) -> Callable:
     """
     This is an overlay depicting a sliding window pattern. Add it on top of a causal mask for a proper sliding
@@ -290,6 +299,13 @@ def _ignore_causal_mask_sdpa(
     return False
 
 
+def _ignore_bidirectional_mask_sdpa(padding_mask: Optional[ms.Tensor]) -> bool:
+    """
+    Detects whether the bidirectional mask can be ignored, i.e. when there is full attention with no padding.
+    """
+    return padding_mask is None or bool(padding_mask.all())
+
+
 def sdpa_mask_recent_torch(
     batch_size: int,
     cache_position: ms.Tensor,
@@ -299,6 +315,7 @@ def sdpa_mask_recent_torch(
     attention_mask: Optional[ms.Tensor] = None,
     local_size: Optional[int] = None,
     allow_is_causal_skip: bool = True,
+    allow_is_bidirectional_skip: bool = False,
     **kwargs,
 ) -> Optional[ms.Tensor]:
     """
@@ -398,8 +415,10 @@ def sdpa_mask_recent_torch(
     # Potentially pad the 2D mask, and slice it correctly
     padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
 
-    # Under specific conditions, we can avoid materializing the mask, instead relying on the `is_causal` argument
+    # Under specific conditions, we can avoid materializing the mask
     if allow_is_causal_skip and _ignore_causal_mask_sdpa(padding_mask, q_length, kv_length, kv_offset, local_size):
+        return None
+    if allow_is_bidirectional_skip and _ignore_bidirectional_mask_sdpa(padding_mask):
         return None
 
     # Similar to `kv_arange = mint.arange(start=kv_offset, end=kv_offset + kv_length, device=cache_position.device)`
@@ -432,6 +451,7 @@ def sdpa_mask_older_torch(
     attention_mask: Optional[ms.Tensor] = None,
     local_size: Optional[int] = None,
     allow_is_causal_skip: bool = True,
+    allow_is_bidirectional_skip: bool = False,
     allow_torch_fix: bool = True,
     **kwargs,
 ) -> Optional[ms.Tensor]:
@@ -471,8 +491,10 @@ def sdpa_mask_older_torch(
     # Potentially pad the 2D mask, and slice it correctly
     padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset)
 
-    # Under specific conditions, we can avoid materializing the mask, instead relying on the `is_causal` argument
+    # Under specific conditions, we can avoid materializing the mask
     if allow_is_causal_skip and _ignore_causal_mask_sdpa(padding_mask, q_length, kv_length, kv_offset, local_size):
+        return None
+    if allow_is_bidirectional_skip and _ignore_bidirectional_mask_sdpa(padding_mask):
         return None
 
     # Similar to `kv_arange = mint.arange(start=kv_offset, end=kv_offset + kv_length, device=cache_position.device)`
@@ -511,8 +533,9 @@ def eager_mask(
     mask_function: Callable = causal_mask_function,
     attention_mask: Optional[ms.Tensor] = None,
     dtype: ms.Type = ms.float32,
+    allow_is_bidirectional_skip: bool = False,
     **kwargs,
-) -> ms.Tensor:
+) -> Optional[ms.Tensor]:
     """
     Create a 4D float mask of shape `(batch_size, 1, query_length, kv_length)` where a value of 0 indicates that
     the element should take part in the attention computation, and -inf (minimum value for the given `dtype`) that
@@ -544,9 +567,12 @@ def eager_mask(
         mask_function=mask_function,
         attention_mask=attention_mask,
         allow_is_causal_skip=False,
+        allow_is_bidirectional_skip=allow_is_bidirectional_skip,
         allow_torch_fix=False,
         **kwargs,
     )
+    if mask is None:
+        return None
     min_dtype = dtype_to_min(dtype)
     # we need 0s where the tokens should be taken into account, and -inf otherwise (mask is already of boolean type)
     mask = mint.where(mask, ms.tensor(0.0, dtype=dtype), min_dtype)
@@ -620,7 +646,7 @@ class AttentionMaskInterface(GeneralInterface):
 ALL_MASK_ATTENTION_FUNCTIONS: AttentionMaskInterface = AttentionMaskInterface()
 
 
-def find_packed_sequence_indices(position_ids: ms.Tensor) -> ms.Tensor:
+def find_packed_sequence_indices(position_ids: ms.Tensor) -> Optional[ms.Tensor]:
     """
     Find the indices of the sequence to which each new query token in the sequence belongs when using packed
     tensor format (i.e. several sequences packed in the same batch dimension).
@@ -655,7 +681,7 @@ def _preprocess_mask_arguments(
     past_key_values: Optional[Cache],
     position_ids: Optional[ms.Tensor],
     layer_idx: Optional[int],
-) -> tuple[bool, Optional[Union[ms.Tensor, BlockMask]], int, int]:
+) -> tuple[bool, Optional[Union[ms.Tensor, BlockMask]], Optional[ms.Tensor], Optional[int], Optional[int]]:
     """
     Perform some common pre-processing of the mask arguments we get from the modeling code. Mostly determine the
     key-value length and offsets, and if we should early exit or not.
@@ -694,7 +720,7 @@ def _preprocess_mask_arguments(
     """
     # If the mask is already 4D, simply return as-is (it was already prepared, or it is custom)
     if isinstance(attention_mask, (ms.Tensor, BlockMask)) and len(attention_mask.shape) == 4:
-        return True, attention_mask, None, None
+        return True, attention_mask, None, None, None
 
     # For TGI/vLLM backends, or other custom attention without equivalent mask creation: we don't need a mask!
     # Note: it's not ideal to check the `_global_mapping` attribute instead of the object itself, however otherwise
@@ -813,6 +839,53 @@ def create_causal_mask(
         config=config,  # Pass the config as well, in case someone wants to easily have their own mask_interface
     )
     return causal_mask
+
+
+def create_bidirectional_mask(
+    config: PretrainedConfig,
+    input_embeds: ms.Tensor,
+    attention_mask: Optional[ms.Tensor],
+    encoder_hidden_states: Optional[ms.Tensor] = None,
+    or_mask_function: Optional[Callable] = None,
+    and_mask_function: Optional[Callable] = None,
+) -> Optional[Union[ms.Tensor, BlockMask]]:
+    """
+    Create a standard bidirectional mask based on the attention implementation used.
+    """
+    cache_position = mint.arange(input_embeds.shape[1], dtype=ms.int32)
+    embeds = encoder_hidden_states if encoder_hidden_states is not None else input_embeds
+
+    early_exit, attention_mask, _, kv_length, kv_offset = _preprocess_mask_arguments(
+        config, embeds, attention_mask, cache_position, None, None, 0
+    )
+    if early_exit:
+        return attention_mask
+
+    batch_size, dtype = embeds.shape[0], embeds.dtype
+    mask_factory_function = bidirectional_mask_function
+    mask_interface = ALL_MASK_ATTENTION_FUNCTIONS[config._attn_implementation]
+    allow_is_bidirectional_skip = True
+
+    if or_mask_function is not None:
+        mask_factory_function = or_masks(mask_factory_function, or_mask_function)
+        allow_is_bidirectional_skip = False
+    if and_mask_function is not None:
+        mask_factory_function = and_masks(mask_factory_function, and_mask_function)
+        allow_is_bidirectional_skip = False
+
+    attention_mask = mask_interface(
+        batch_size=batch_size,
+        cache_position=cache_position,
+        kv_length=kv_length,
+        kv_offset=kv_offset,
+        mask_function=mask_factory_function,
+        attention_mask=attention_mask,
+        allow_is_causal_skip=False,
+        allow_is_bidirectional_skip=allow_is_bidirectional_skip,
+        dtype=dtype,
+        config=config,
+    )
+    return attention_mask
 
 
 def create_sliding_window_causal_mask(
@@ -1037,7 +1110,7 @@ def create_masks_for_generate(
     or_mask_function: Optional[Callable] = None,
     and_mask_function: Optional[Callable] = None,
     **kwargs,
-):
+) -> Optional[Union[ms.Tensor, BlockMask, dict[str, Optional[Union[ms.Tensor, BlockMask]]]]]:
     """
     This function mimics how we create the masks in the `modeling_xxx.py` files, and is used in `generate` in order
     to easily create the masks in advance, when we compile the forwards with Static caches.
@@ -1082,6 +1155,8 @@ def create_masks_for_generate(
     if hasattr(effective_config, "layer_types"):
         causal_masks = {}
         for layer_pattern in set(effective_config.layer_types):
+            if layer_pattern not in LAYER_PATTERN_TO_MASK_FUNCTION_MAPPING:
+                raise ValueError(f"Unsupported attention layer pattern: {layer_pattern}")
             causal_masks[layer_pattern] = LAYER_PATTERN_TO_MASK_FUNCTION_MAPPING[layer_pattern](**mask_kwargs)
         return causal_masks
     # In this case, all layers are sliding

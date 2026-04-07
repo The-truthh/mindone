@@ -31,7 +31,7 @@ class CacheLayerMixin(ABC):
         return f"{self.__class__.__name__}"
 
     @abstractmethod
-    def lazy_initialization(self, key_states: ms.Tensor):
+    def lazy_initialization(self, key_states: ms.Tensor, value_states: Optional[ms.Tensor] = None):
         ...
 
     @abstractmethod
@@ -90,9 +90,9 @@ class DynamicLayer(CacheLayerMixin):
     is_sliding = False
 
     # FIXME "mindspore.mint.cat" does not support operation between tensor shape like (0,) and (b, h, s, d)
-    def lazy_initialization(self, key_states: ms.Tensor, value_states: ms.Tensor):
+    def lazy_initialization(self, key_states: ms.Tensor, value_states: Optional[ms.Tensor] = None):
         self.keys = key_states
-        self.values = value_states
+        self.values = key_states if value_states is None else value_states
         self.is_initialized = True
 
     def update(
@@ -179,6 +179,7 @@ class DynamicSlidingWindowLayer(DynamicLayer):
         super().__init__()
         self.sliding_window = sliding_window
         self.cumulative_length = 0
+        self._sliding_window_tensor = ms.tensor([self.sliding_window], dtype=ms.int32)
 
     def update(
         self,
@@ -268,7 +269,7 @@ class StaticLayer(CacheLayerMixin):
         super().__init__()
         self.max_cache_len = max_cache_len
 
-    def lazy_initialization(self, key_states: ms.Tensor):
+    def lazy_initialization(self, key_states: ms.Tensor, value_states: Optional[ms.Tensor] = None):
         """
         Lazy initialization of the keys and values tensors. This allows to get all properties (dtype, device,
         num_heads in case of TP etc...) at runtime directly, which is extremely practical as it avoids moving
@@ -282,15 +283,18 @@ class StaticLayer(CacheLayerMixin):
         i.e. `mode="reduce-overhead"` is known to fail). But it will in general work correctly, and prefill should
         not be compiled anyway for performances!
         """
-        self.max_batch_size, self.num_heads, _, self.head_dim = key_states.shape
+        value_states = key_states if value_states is None else value_states
+        self.max_batch_size, self.num_heads = key_states.shape[:2]
+        self.k_head_dim = key_states.shape[-1]
+        self.v_head_dim = value_states.shape[-1]
         self.dtype = key_states.dtype
 
         self.keys = mint.zeros(
-            (self.max_batch_size, self.num_heads, self.max_cache_len, self.head_dim),
+            (self.max_batch_size, self.num_heads, self.max_cache_len, self.k_head_dim),
             dtype=self.dtype,
         )
         self.values = mint.zeros(
-            (self.max_batch_size, self.num_heads, self.max_cache_len, self.head_dim),
+            (self.max_batch_size, self.num_heads, self.max_cache_len, self.v_head_dim),
             dtype=self.dtype,
         )
 
@@ -315,7 +319,7 @@ class StaticLayer(CacheLayerMixin):
         """
         # Lazy initialization
         if not self.is_initialized:
-            self.lazy_initialization(key_states)
+            self.lazy_initialization(key_states, value_states)
 
         # Some old models give None for `cache_position` or even omit passing `cache_kwargs` when used as cross-attention,
         # in which case we should copy the whole Layer (key_states.shape[-2] == self.max_cache_len)
@@ -389,7 +393,7 @@ class StaticSlidingWindowLayer(StaticLayer):
 
         # Lazy initialization
         if not self.is_initialized:
-            self.lazy_initialization(key_states)
+            self.lazy_initialization(key_states, value_states)
 
         # Some old models give None for `cache_position` or even omit passing `cache_kwargs` when used as cross-attention,
         # in which case we should copy the whole Layer (key_states.shape[-2] == self.max_cache_len)
@@ -616,10 +620,10 @@ class Cache:
         # Note that the initialization needs all dimensions (except -2), as well as device and dtype, so we use
         # this fake tensor approach. It has size 0 on the -2 dimension, so it does not allocate any data (it only
         # creates an empty tensor with correct shape, dtype and device), which is very efficient and practical
-        fake_keys_tensor = mint.zeros((batch_size, num_heads, 0, head_dim), dtype=dtype)
+        fake_kv_tensor = mint.zeros((batch_size, num_heads, 0, head_dim), dtype=dtype)
         # Init all layers
         for layer in self.layers:
-            layer.lazy_initialization(fake_keys_tensor)
+            layer.lazy_initialization(fake_kv_tensor, fake_kv_tensor)
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
         """Returns the sequence length of the cache for the given layer."""
@@ -745,7 +749,7 @@ class DynamicCache(Cache):
     See `Cache` for details on common methods that are implemented by all cache classes.
 
     Args:
-        ddp_cache_data (`Iterable[tuple[ms.Tensor, ms.Tensor]]`, *optional*):
+        ddp_cache_data (`Iterable[tuple[ms.Tensor, ...]]`, *optional*):
             It was originally added for compatibility with `torch.distributed` (DDP). In a nutshell, it is
             `map(gather_map, zip(*caches))`, i.e. each item in the iterable contains the key and value states
             for a layer gathered across replicas by torch.distributed (shape=[global batch size, num_heads, seq_len, head_dim]).
@@ -784,7 +788,7 @@ class DynamicCache(Cache):
 
     def __init__(
         self,
-        ddp_cache_data: Optional[Iterable[tuple[ms.Tensor, ms.Tensor]]] = None,
+        ddp_cache_data: Optional[Iterable[tuple[ms.Tensor, ...]]] = None,
         config: Optional[PretrainedConfig] = None,
         offloading: bool = False,  # Not support yet
         offload_only_non_sliding: bool = False,  # Not support yet
@@ -817,10 +821,16 @@ class DynamicCache(Cache):
         # In this case, use the passed data to already fill in the Cache
         if ddp_cache_data is not None:
             # Init all the layers with the data
-            for layer_idx, (key_states, value_states) in enumerate(ddp_cache_data):
-                # If the config was not passed above, initialize a DynamicLayer for each entry of the ddp_data
+            for layer_idx, kv_and_optional_sliding in enumerate(ddp_cache_data):
+                key_states, value_states = kv_and_optional_sliding[:2]
+                sliding_window_tensor = kv_and_optional_sliding[2] if len(kv_and_optional_sliding) == 3 else None
+                # If the config was not passed above, initialize a cache layer for each entry of the ddp_data
                 if config is None:
-                    layers.append(DynamicLayer())
+                    if sliding_window_tensor is not None:
+                        sliding_window = int(sliding_window_tensor[0].asnumpy().item())
+                        layers.append(DynamicSlidingWindowLayer(sliding_window=sliding_window))
+                    else:
+                        layers.append(DynamicLayer())
                 # Update the layer with the data
                 _, _ = layers[layer_idx].update(key_states, value_states)
 
@@ -834,6 +844,10 @@ class DynamicCache(Cache):
         else:
             super().__init__(layers=layers, offloading=offloading, offload_only_non_sliding=offload_only_non_sliding)
 
+    def __iter__(self):
+        for layer in self.layers:
+            yield layer.keys, layer.values, getattr(layer, "_sliding_window_tensor", None)
+
     def to_legacy_cache(self) -> tuple[tuple[ms.Tensor, ms.Tensor]]:
         """
         Converts the `Cache` instance into the its equivalent in the legacy cache format. Used for
@@ -845,7 +859,7 @@ class DynamicCache(Cache):
         return legacy_cache
 
     @classmethod
-    def from_legacy_cache(cls, past_key_values: tuple[tuple[ms.Tensor, ms.Tensor]]) -> "DynamicCache":
+    def from_legacy_cache(cls, past_key_values: tuple[tuple[ms.Tensor, ...], ...]) -> "DynamicCache":
         """
         Converts a cache in the legacy cache format into an equivalent `Cache`. Used for
         backward compatibility.
@@ -854,10 +868,40 @@ class DynamicCache(Cache):
         if past_key_values is None:
             logger.warning_once("past_key_values should not be None in from_legacy_cache()")
         if past_key_values is not None:
-            for layer_idx in range(len(past_key_values)):
-                key_states, value_states = past_key_values[layer_idx]
+            for layer_idx, key_value_states in enumerate(past_key_values):
+                key_states, value_states = key_value_states[:2]
                 cache.update(key_states, value_states, layer_idx)
         return cache
+
+    def batch_split(self, full_batch_size: int, split_size: int) -> "list[DynamicCache]":
+        """
+        Split the current instance into a list of `DynamicCache` by the batch size. This will be used by
+        `_split_model_inputs()` in `generation.utils`.
+        """
+        out = []
+        for start in range(0, full_batch_size, split_size):
+            split_cache = DynamicCache()
+            split_cache.layers = []
+            split_cache.layer_class_to_replicate = None
+
+            for layer in self.layers:
+                if isinstance(layer, DynamicSlidingWindowLayer):
+                    split_layer = DynamicSlidingWindowLayer(layer.sliding_window)
+                    split_layer.cumulative_length = layer.cumulative_length
+                    split_layer._sliding_window_tensor = layer._sliding_window_tensor
+                else:
+                    split_layer = DynamicLayer()
+
+                split_layer.is_initialized = layer.is_initialized
+                if layer.keys is not None:
+                    split_layer.keys = layer.keys[start : start + split_size]
+                if layer.values is not None:
+                    split_layer.values = layer.values[start : start + split_size]
+                split_cache.layers.append(split_layer)
+
+            out.append(split_cache)
+
+        return out
 
 
 class StaticCache(Cache):
@@ -981,7 +1025,7 @@ class QuantizedCache(Cache):
         q_group_size: int = 64,
         residual_length: int = 128,
     ):
-        raise NotImplementedError
+        raise NotImplementedError("`QuantizedCache` is not supported in MindSpore yet.")
 
 
 class EncoderDecoderCache(Cache):
@@ -1021,15 +1065,20 @@ class EncoderDecoderCache(Cache):
     def __init__(self, *caches) -> None:
         # For dp and ddp support, if only one argument is passed, it should be an iterable of tuples of tensors
         if len(caches) == 1:
-            self.self_attention_cache = DynamicCache()
-            self.cross_attention_cache = DynamicCache()
-            # Populate cache from the iterable
-            for layer_idx, key_value_states in enumerate(caches[0]):
-                key_states, value_states = key_value_states[:2]
-                self.self_attention_cache.update(key_states, value_states, layer_idx)
-                if len(key_value_states) > 2:
-                    key_states, value_states = key_value_states[2:]
-                    self.cross_attention_cache.update(key_states, value_states, layer_idx)
+            self_attention_cache_data, cross_attention_cache_data = [], []
+            for combined_cache_data in caches[0]:
+                if len(combined_cache_data) == 6:
+                    self_attention_cache_data.append(combined_cache_data[:3])
+                    cross_attention_cache_data.append(combined_cache_data[3:])
+                elif len(combined_cache_data) == 4:
+                    self_attention_cache_data.append(combined_cache_data[:2])
+                    cross_attention_cache_data.append(combined_cache_data[2:])
+                else:
+                    raise ValueError(
+                        f"Expected len(combined_cache_data) to be 4 or 6, got {len(combined_cache_data)}"
+                    )
+            self.self_attention_cache = DynamicCache(self_attention_cache_data)
+            self.cross_attention_cache = DynamicCache(cross_attention_cache_data)
         # Otherwise, we should get two arguments, a self-attention cache and a cross-attention cache
         elif len(caches) == 2:
             if not isinstance(caches[0], Cache) or not isinstance(caches[1], Cache):
@@ -1051,30 +1100,17 @@ class EncoderDecoderCache(Cache):
         )
 
     def __iter__(self):
-        """
-        Support for backwards-compatible `past_key_values` iteration, e.g. `for x in past_key_values:` to iterate over
-        keys and values
-        """
-        for layer_idx in range(len(self)):
-            yield (
-                self.self_attention_cache.layers[layer_idx].keys,
-                self.self_attention_cache.layers[layer_idx].values,
-                self.cross_attention_cache.layers[layer_idx].keys,
-                self.cross_attention_cache.layers[layer_idx].values,
-            )
+        """Returns tuples of style (self_attn_k, self_attn_v, self_attn_sliding, cross_attn_k, cross_attn_v, cross_attn_sliding)."""
+        for self_attention_layer, cross_attention_layer in zip(self.self_attention_cache, self.cross_attention_cache):
+            yield self_attention_layer + cross_attention_layer
 
-    def __getitem__(self, layer_idx: int) -> tuple[ms.Tensor, ms.Tensor, ms.Tensor, ms.Tensor]:
+    def __getitem__(self, layer_idx: int) -> tuple[ms.Tensor, ms.Tensor, Optional[ms.Tensor], ms.Tensor, ms.Tensor, Optional[ms.Tensor]]:
         """
         Support for backwards-compatible `past_key_values` indexing, e.g. `past_key_values[0][0].shape[2]` to get the
         sequence length.
         """
         if layer_idx < len(self):
-            return (
-                self.self_attention_cache.layers[layer_idx].keys,
-                self.self_attention_cache.layers[layer_idx].values,
-                self.cross_attention_cache.layers[layer_idx].keys,
-                self.cross_attention_cache.layers[layer_idx].values,
-            )
+            return self.self_attention_cache[layer_idx] + self.cross_attention_cache[layer_idx]
         else:
             raise KeyError(f"Cache only has {len(self)} layers, attempted to access layer with index {layer_idx}")
 
@@ -1098,7 +1134,7 @@ class EncoderDecoderCache(Cache):
         return legacy_cache
 
     @classmethod
-    def from_legacy_cache(cls, past_key_values: tuple[tuple[ms.Tensor, ms.Tensor], ...]) -> "EncoderDecoderCache":
+    def from_legacy_cache(cls, past_key_values: tuple[tuple[ms.Tensor, ...], ...]) -> "EncoderDecoderCache":
         """Converts a cache in the legacy cache format into an equivalent `EncoderDecoderCache`."""
         cache = cls(DynamicCache(), DynamicCache())
         if past_key_values is None:
@@ -1108,7 +1144,8 @@ class EncoderDecoderCache(Cache):
                 key_states, value_states = key_value_states[:2]
                 cache.self_attention_cache.update(key_states, value_states, layer_idx)
                 if len(key_value_states) > 2:
-                    key_states, value_states = key_value_states[2:]
+                    cross_attention_states = key_value_states[3:] if len(key_value_states) >= 6 else key_value_states[2:]
+                    key_states, value_states = cross_attention_states[:2]
                     cache.cross_attention_cache.update(key_states, value_states, layer_idx)
                     cache.is_updated[layer_idx] = True
         return cache
@@ -1133,7 +1170,7 @@ class EncoderDecoderCache(Cache):
         if not (
             isinstance(self.self_attention_cache, DynamicCache) and isinstance(self.cross_attention_cache, DynamicCache)
         ):
-            raise ValueError(
+            raise TypeError(
                 f"`{method}` is only defined for dynamic cache, got {self.self_attention_cache.__str__()} for the self "
                 f"attention cache and {self.cross_attention_cache.__str__()} for the cross attention cache."
             )
@@ -1216,8 +1253,7 @@ class OffloadedCache(DynamicCache):
             "`OffloadedCache` is deprecated and will be removed in version v4.59 "
             "Use `DynamicCache(offloading=True)` instead"
         )
-        super().__init__(offloading=True)
-        raise NotImplementedError
+        raise NotImplementedError("`OffloadedCache` is not supported in MindSpore yet.")
 
 
 class OffloadedStaticCache(StaticCache):
@@ -1226,8 +1262,7 @@ class OffloadedStaticCache(StaticCache):
             "`OffloadedStaticCache` is deprecated and will be removed in version v4.59 "
             "Use `StaticCache(..., offloading=True)` instead"
         )
-        super().__init__(config=config, max_cache_len=max_cache_len, offloading=True)
-        raise NotImplementedError
+        raise NotImplementedError("`OffloadedStaticCache` is not supported in MindSpore yet.")
 
 
 class SlidingWindowCache(StaticCache):
@@ -1263,8 +1298,7 @@ class OffloadedHybridCache(StaticCache):
             "`OffloadedHybridCache` is deprecated and will be removed in version v4.59 "
             "Use `StaticCache(..., offload=True)` instead which will correctly infer the type of each layer."
         )
-        super().__init__(config=config, max_cache_len=max_cache_len, offloading=True)
-        raise NotImplementedError
+        raise NotImplementedError("`OffloadedHybridCache` is not supported in MindSpore yet.")
 
 
 class QuantoQuantizedCache(QuantizedCache):
@@ -1281,8 +1315,7 @@ class QuantoQuantizedCache(QuantizedCache):
             "`QuantoQuantizedCache` is deprecated and will be removed in version v4.59 "
             "Use `QuantizedCache(backend='quanto', ...)` instead."
         )
-        super().__init__("quanto", config, nbits, axis_key, axis_value, q_group_size, residual_length)
-        raise NotImplementedError
+        raise NotImplementedError("`QuantoQuantizedCache` is not supported in MindSpore yet.")
 
 
 class HQQQuantizedCache(QuantizedCache):
@@ -1299,8 +1332,7 @@ class HQQQuantizedCache(QuantizedCache):
             "`HQQQuantizedCache` is deprecated and will be removed in version v4.59 "
             "Use `QuantizedCache(backend='hqq', ...)` instead."
         )
-        super().__init__("hqq", config, nbits, axis_key, axis_value, q_group_size, residual_length)
-        raise NotImplementedError
+        raise NotImplementedError("`HQQQuantizedCache` is not supported in MindSpore yet.")
 
 
 class SinkCache(Cache):

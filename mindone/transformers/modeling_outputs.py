@@ -14,7 +14,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -278,7 +277,7 @@ class BaseModelOutputWithPastAndCrossAttentions(ModelOutput):
     """
 
     last_hidden_state: ms.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ms.Tensor]]] = None
+    past_key_values: Optional[Cache] = None
     hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
     attentions: Optional[Tuple[ms.Tensor, ...]] = None
     cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
@@ -363,6 +362,7 @@ class MoEModelOutput(ModelOutput):
     hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
     attentions: Optional[Tuple[ms.Tensor, ...]] = None
     router_probs: Optional[Tuple[ms.Tensor]] = None
+    router_logits: Optional[Tuple[ms.Tensor]] = None
 
 
 @dataclass
@@ -499,11 +499,12 @@ class MoEModelOutputWithPastAndCrossAttentions(ModelOutput):
     """
 
     last_hidden_state: ms.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ms.Tensor]]] = None
+    past_key_values: Optional[Cache] = None
     hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
     attentions: Optional[Tuple[ms.Tensor, ...]] = None
     cross_attentions: Optional[Tuple[ms.Tensor, ...]] = None
     router_probs: Optional[Tuple[ms.Tensor]] = None
+    router_logits: Optional[Tuple[ms.Tensor]] = None
 
 
 @dataclass
@@ -518,10 +519,9 @@ class Seq2SeqModelOutput(ModelOutput):
 
             If `past_key_values` is used only the last hidden-state of the sequences of shape `(batch_size, 1,
             hidden_size)` is output.
-        past_key_values (`tuple(tuple(ms.Tensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(ms.Tensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
-            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+        past_key_values (`EncoderDecoderCache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            It is a [`~cache_utils.EncoderDecoderCache`] instance. For more details, see our
+            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache).
 
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
@@ -1726,12 +1726,3 @@ class MaskedImageModelingOutput(ModelOutput):
     reconstruction: Optional[ms.Tensor] = None
     hidden_states: Optional[Tuple[ms.Tensor, ...]] = None
     attentions: Optional[Tuple[ms.Tensor, ...]] = None
-
-    @property
-    def logits(self):
-        warnings.warn(
-            "logits attribute is deprecated and will be removed in version 5 of Transformers."
-            " Please use the reconstruction attribute to retrieve the final output instead.",
-            FutureWarning,
-        )
-        return self.reconstruction
