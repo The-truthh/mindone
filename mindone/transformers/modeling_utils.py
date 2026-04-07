@@ -435,7 +435,7 @@ def _get_resolved_checkpoint_files(
     commit_hash: Optional[str],
     is_remote_code: bool,  # Because we can't determine this inside this function, we need it to be passed in
     transformers_explicit_filename: Optional[str] = None,
-) -> tuple[Optional[list[str]], Optional[dict]]:
+) -> tuple[Optional[list[str]], Optional[dict], bool]:
     """Get all the checkpoint filenames based on `pretrained_model_name_or_path`, and optional metadata if the
     checkpoints are sharded.
     This function will download the data if necessary.
@@ -455,6 +455,17 @@ def _get_resolved_checkpoint_files(
             "Please convert your checkpoint to PyTorch format first using the conversion scripts: "
             "https://github.com/huggingface/transformers/tree/main/src/transformers/models"
         )
+
+    if transformers_explicit_filename is not None:
+        if not transformers_explicit_filename.endswith(".safetensors") and not transformers_explicit_filename.endswith(
+            ".safetensors.index.json"
+        ):
+            if transformers_explicit_filename != "adapter_model.bin":
+                raise ValueError(
+                    "The transformers file in the config seems to be incorrect: it is neither a safetensors file "
+                    "(*.safetensors) nor a safetensors index file (*.safetensors.index.json): "
+                    f"{transformers_explicit_filename}"
+                )
 
     # This variable will flag if we're loading a sharded checkpoint. In this case the archive file is just the
     # index of the files.
@@ -532,7 +543,10 @@ def _get_resolved_checkpoint_files(
             )
         else:
             # set correct filename
-            if use_safetensors is not False:
+            if transformers_explicit_filename is not None:
+                filename = transformers_explicit_filename
+                is_sharded = transformers_explicit_filename.endswith(".safetensors.index.json")
+            elif use_safetensors is not False:
                 filename = _add_variant(SAFE_WEIGHTS_NAME, variant)
             else:
                 filename = _add_variant(WEIGHTS_NAME, variant)
@@ -2271,6 +2285,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         variant: Optional[str] = None,
         token: Optional[Union[str, bool]] = None,
         save_peft_format: bool = True,
+        save_original_format: bool = True,
         **kwargs,
     ):
         """
@@ -2309,9 +2324,10 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 </Tip>
 
             safe_serialization (`bool`, *optional*, defaults to `True`):
-                Whether to save the model using `safetensors` or the traditional PyTorch way (that uses `pickle`).
+                Whether to save the model using `safetensors`. MindONE's v5-compatible loading path currently only
+                supports safetensors checkpoints.
             variant (`str`, *optional*):
-                If specified, weights are saved in the format pytorch_model.<variant>.bin.
+                If specified, weights are saved in the format `model.<variant>.safetensors`.
             token (`str` or `bool`, *optional*):
                 The token to use as HTTP bearer authorization for remote files. If `True`, or not specified, will use
                 the token generated when running `hf auth login` (stored in `~/.huggingface`).
@@ -2319,6 +2335,9 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 For backward compatibility with PEFT library, in case adapter weights are attached to the model, all
                 keys of the state dict of adapters needs to be prepended with `base_model.model`. Advanced users can
                 disable this behaviours by setting `save_peft_format` to `False`.
+            save_original_format (`bool`, *optional*, defaults to `True`):
+                Whether to revert checkpoint key remapping before saving, when the model was loaded through a
+                conversion mapping.
             kwargs (`dict[str, Any]`, *optional*):
                 Additional key word arguments passed along to the [`~utils.PushToHubMixin.push_to_hub`] method.
         """
@@ -2337,6 +2356,12 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
 
         if token is not None:
             kwargs["token"] = token
+
+        if not safe_serialization:
+            raise ValueError(
+                "MindONE's v5-compatible `save_pretrained()` path currently only supports "
+                "`safe_serialization=True`, because `from_pretrained()` only supports safetensors checkpoints."
+            )
 
         _hf_peft_config_loaded = getattr(self, "_hf_peft_config_loaded", False)
 
@@ -2427,12 +2452,13 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         if state_dict is None:
             state_dict = {k: v for k, v in model_to_save.parameters_and_names()}
 
-        # v5.0.0: Revert weight conversion before saving (for compatibility with weight mapping)
-        from .core_model_loading import revert_weight_conversion
+        # v5.0.0: Revert weight conversion before saving when we want hub/original-format checkpoint keys.
+        if save_original_format and not _hf_peft_config_loaded:
+            from .core_model_loading import revert_weight_conversion
 
-        state_dict = revert_weight_conversion(model_to_save, state_dict)
+            state_dict = revert_weight_conversion(model_to_save, state_dict)
 
-        if any(
+        if save_original_format and any(
             allowed_name in class_name.__name__.lower()
             for class_name in self.__class__.__mro__[:-1]
             for allowed_name in VLMS
@@ -2547,13 +2573,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                     - A string, the *model id* of a pretrained model hosted inside a model repo on huggingface.co.
                     - A path to a *directory* containing model weights saved using
                       [`~PreTrainedModel.save_pretrained`], e.g., `./my_model_directory/`.
-                    - A path or url to a *tensorflow index checkpoint file* (e.g, `./tf_model/model.ckpt.index`). In
-                      this case, `from_tf` should be set to `True` and a configuration object should be provided as
-                      `config` argument. This loading path is slower than converting the TensorFlow checkpoint in a
-                      MindSpore model using the provided conversion scripts and loading the MindSpore model afterwards.
-                    - A path or url to a model folder containing a *flax checkpoint file* in *.msgpack* format (e.g,
-                      `./flax_model/` containing `flax_model.msgpack`). In this case, `from_flax` should be set to
-                      `True`.
                     - `None` if you are both providing the configuration and state dictionary (resp. with keyword
                       arguments `config` and `state_dict`).
             model_args (sequence of positional arguments, *optional*):
@@ -2582,12 +2601,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             cache_dir (`Union[str, os.PathLike]`, *optional*):
                 Path to a directory in which a downloaded pretrained model configuration should be cached if the
                 standard cache should not be used.
-            from_tf (`bool`, *optional*, defaults to `False`):
-                Load the model weights from a TensorFlow checkpoint save file (see docstring of
-                `pretrained_model_name_or_path` argument).
-            from_flax (`bool`, *optional*, defaults to `False`):
-                Load the model weights from a Flax checkpoint save file (see docstring of
-                `pretrained_model_name_or_path` argument).
             ignore_mismatched_sizes (`bool`, *optional*, defaults to `False`):
                 Whether or not to raise an error if some of the weights from the checkpoint do not have the same size
                 as the weights of the model (if for instance, you are instantiating a model with 10 labels from a
@@ -2646,8 +2659,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 In case the relevant files are located inside a subfolder of the model repo on huggingface.co, you can
                 specify the folder name here.
             variant (`str`, *optional*):
-                If specified load weights from `variant` filename, *e.g.* mindspore_model.<variant>.bin. `variant` is
-                ignored when using `from_tf` or `from_flax`.
+                If specified load weights from `variant` filename, *e.g.* mindspore_model.<variant>.bin.
             use_safetensors (`bool`, *optional*, defaults to `True`):
                 Whether or not to use `safetensors` checkpoints. Defaults to `True`. Three possible values:
 
@@ -2688,11 +2700,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         >>> # Update configuration during loading.
         >>> model = BertModel.from_pretrained("google-bert/bert-base-uncased", output_attentions=True)
         >>> assert model.config.output_attentions == True
-        >>> # Loading from a TF checkpoint file instead of a MindSpore model (slower, for example purposes, not runnable).
-        >>> config = BertConfig.from_json_file("./tf_model/my_tf_model_config.json")
-        >>> model = BertModel.from_pretrained("./tf_model/my_tf_checkpoint.ckpt.index", from_tf=True, config=config)
-        >>> # Loading from a Flax checkpoint file instead of a MindSpore model (slower)
-        >>> model = BertModel.from_pretrained("google-bert/bert-base-uncased", from_flax=True)
         ```
 
         * `low_cpu_mem_usage` algorithm:
@@ -2729,7 +2736,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 "https://github.com/huggingface/transformers/tree/main/src/transformers/models"
             )
 
-        resume_download = kwargs.pop("resume_download", None)
         proxies = kwargs.pop("proxies", None)
         output_loading_info = kwargs.pop("output_loading_info", False)
         use_auth_token = kwargs.pop("use_auth_token", None)
@@ -2791,7 +2797,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                     CONFIG_NAME,
                     cache_dir=cache_dir,
                     force_download=force_download,
-                    resume_download=resume_download,
                     proxies=proxies,
                     local_files_only=local_files_only,
                     token=token,
@@ -2827,8 +2832,6 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             with open(_adapter_model_path, "r", encoding="utf-8") as f:
                 _adapter_model_path = pretrained_model_name_or_path
                 pretrained_model_name_or_path = json.load(f)["base_model_name_or_path"]
-
-        from_pt = not (from_tf | from_flax)
 
         user_agent = {"file_type": "model", "framework": "pytorch", "from_auto_class": from_auto_class}
         if from_pipeline is not None:
@@ -2931,31 +2934,25 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                     f"Incompatible safetensors file. File metadata is not ['pt', 'tf', 'flax'] but {metadata.get('format')}"
                 )
 
-        # v5.0.0: Only PyTorch format is supported (TF/Flax removed)
-        from_pt = True
+        # Only PyTorch-format checkpoints are supported in the v5-compatible MindONE path.
+        if not is_sharded and state_dict is None:
+            state_dict = load_state_dict(resolved_archive_file)
 
-        # load pt weights early so that we know which dtype to init the model under
-        if from_pt:
-            if not is_sharded and state_dict is None:
-                # Time to load the checkpoint
-                state_dict = load_state_dict(resolved_archive_file)
+        config, dtype = _get_dtype(
+            cls,
+            dtype,
+            resolved_archive_file,
+            config,
+            sharded_metadata,
+            state_dict,
+            weights_only,
+            is_sharded,
+        )
 
-            # Find the correct dtype based on current state
-            config, dtype = _get_dtype(
-                cls,
-                dtype,
-                resolved_archive_file,
-                config,
-                sharded_metadata,
-                state_dict,
-                weights_only,
-                is_sharded,
-            )
-
-            if is_sharded:
-                loaded_state_dict_keys = sharded_metadata["all_checkpoint_keys"]
-            else:
-                loaded_state_dict_keys = list(state_dict.keys())
+        if is_sharded:
+            loaded_state_dict_keys = sharded_metadata["all_checkpoint_keys"]
+        else:
+            loaded_state_dict_keys = list(state_dict.keys())
 
         config.name_or_path = pretrained_model_name_or_path
 
@@ -3059,37 +3056,13 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 except OSError:  # there is no custom generate function
                     pass
 
-        # If it is a model with generation capabilities, attempt to load the generation config
-        if model.can_generate() and pretrained_model_name_or_path is not None:
-            try:
-                model.generation_config = GenerationConfig.from_pretrained(
-                    pretrained_model_name_or_path,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    resume_download=resume_download,
-                    proxies=proxies,
-                    local_files_only=local_files_only,
-                    token=token,
-                    revision=revision,
-                    subfolder=subfolder,
-                    _from_auto=from_auto_class,
-                    _from_pipeline=from_pipeline,
-                    **kwargs,
-                )
-            except OSError:
-                logger.info(
-                    "Generation config file not found, using a generation config created from the model config."
-                )
-                pass
-
         if output_loading_info:
-            if from_pt:
-                loading_info = {
-                    "missing_keys": missing_keys,
-                    "unexpected_keys": unexpected_keys,
-                    "mismatched_keys": mismatched_keys,
-                    "error_msgs": error_msgs,
-                }
+            loading_info = {
+                "missing_keys": missing_keys,
+                "unexpected_keys": unexpected_keys,
+                "mismatched_keys": mismatched_keys,
+                "error_msgs": error_msgs,
+            }
             return model, loading_info
 
         return model

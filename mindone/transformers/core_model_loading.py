@@ -14,8 +14,11 @@
 # limitations under the License.
 """Core helpers for loading model checkpoints (MindSpore version).
 
-This module provides v5.0.0 compatible APIs for model weight loading,
-adapted for MindSpore backend.
+This module intentionally stays as a thin compatibility layer. In the current
+MindONE v5 migration stage, checkpoint discovery, key-renaming preparation and
+most loading orchestration still live in ``modeling_utils.py``. The helpers
+defined here only cover the minimal shared entrypoints that ``modeling_utils``
+delegates to after the checkpoint payload has already been normalized.
 """
 
 from __future__ import annotations
@@ -66,10 +69,11 @@ class WeightConverter:
 @dataclass
 class LoadStateDictConfig:
     """
-    Config for loading weights. This allows bundling arguments that are just
-    passed around.
+    Compatibility config container for checkpoint loading helpers.
 
-    Adapted from transformers v5.0.0 for MindSpore compatibility.
+    This currently mirrors only the subset of upstream structure that MindONE
+    needs for the staged v5 migration. It should not be treated as a full
+    replacement for upstream ``core_model_loading.LoadStateDictConfig``.
     """
     pretrained_model_name_or_path: str | None = None
     use_safetensors: bool = True
@@ -191,9 +195,13 @@ def convert_and_load_state_dict_in_model(
     """
     Load state_dict into model with optional weight mapping.
 
-    This is the v5.0.0 compatible entry point for loading weights into models.
-    It serves as a unified loading interface and delegates to MindONE's
-    existing loading logic.
+    This is the v5-compatible entry point for loading normalized weights into a
+    model.
+
+    ``modeling_utils._load_pretrained_model`` remains responsible for checkpoint
+    resolution, key-renaming preparation, dtype decisions and mismatch scanning.
+    This helper only applies the final optional weight mapping and delegates the
+    actual parameter assignment to MindONE's existing low-level loader.
 
     Args:
         model: The MindSpore model to load weights into
@@ -313,6 +321,9 @@ def load_state_dict_and_config(
 ) -> tuple[dict[str, ms.Tensor], LoadStateDictConfig]:
     """
     Load state dict from checkpoint file with config.
+
+    This helper is kept for API compatibility and lightweight call-site reuse.
+    It is not the primary loading entrypoint for ``from_pretrained()``.
 
     Args:
         checkpoint_file: Path to checkpoint file
