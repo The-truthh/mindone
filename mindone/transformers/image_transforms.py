@@ -816,31 +816,38 @@ def _group_images_by_shape(nested_images, is_nested: bool = False):
             grouped_images[shape].append(image)
             grouped_images_index[key] = (shape, len(grouped_images[shape]) - 1)
 
+    if is_nested:
+        grouped_images_index["_num_sublists"] = len(nested_images)
+
     return grouped_images, grouped_images_index
 
 
 def _reconstruct_nested_structure(indices, processed_images):
     """Helper function to reconstruct a single level nested structure."""
-    # Find the maximum outer index
-    max_outer_idx = max(idx[0] for idx in indices)
+    num_sublists = indices.pop("_num_sublists", None)
 
-    # Create the outer list
-    result = [None] * (max_outer_idx + 1)
-
-    # Group indices by outer index
     nested_indices = defaultdict(list)
     for i, j in indices:
         nested_indices[i].append(j)
 
+    if num_sublists is not None:
+        max_outer_idx = num_sublists - 1
+    elif nested_indices:
+        max_outer_idx = max(nested_indices.keys())
+    else:
+        return []
+
+    result = []
     for i in range(max_outer_idx + 1):
-        if i in nested_indices:
-            inner_max_idx = max(nested_indices[i])
-            inner_list = [None] * (inner_max_idx + 1)
-            for j in range(inner_max_idx + 1):
-                if (i, j) in indices:
-                    shape, idx = indices[(i, j)]
-                    inner_list[j] = processed_images[shape][idx]
-            result[i] = inner_list
+        if i not in nested_indices:
+            result.append([])
+            continue
+        inner_max_idx = max(nested_indices[i])
+        inner_list = [None] * (inner_max_idx + 1)
+        for j in nested_indices[i]:
+            shape, idx = indices[(i, j)]
+            inner_list[j] = processed_images[shape][idx]
+        result.append(inner_list)
 
     return result
 
@@ -872,7 +879,7 @@ def group_images_by_shape(
     # If disable grouping is not explicitly provided, original repo favor disabling it if the images are on CPU, and enabling it otherwise.
     # TODO basically ms.tensors in mindone.transformers should be on device, so no device detection is performed here, and provide stack operation always.
     if disable_grouping:
-        logger.warining("mindone.transformers currently does not support disable_grouping in image_transformers")
+        logger.warning("mindone.transformers currently does not support disable_grouping in image_transformers")
 
     # Handle single level nested structure
     grouped_images, grouped_images_index = _group_images_by_shape(images, is_nested)

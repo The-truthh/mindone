@@ -25,6 +25,8 @@ from transformers.utils import logging
 from .image_processing_base import BatchFeature, ImageProcessingMixin
 from .image_transforms import center_crop, normalize, rescale
 from .image_utils import ChannelDimension, get_image_size
+from .processing_utils import ImagesKwargs, Unpack
+from .utils.import_utils import requires
 
 logger = logging.get_logger(__name__)
 
@@ -35,7 +37,10 @@ INIT_SERVICE_KWARGS = [
 ]
 
 
+@requires(backends=("vision",))
 class BaseImageProcessor(ImageProcessingMixin):
+    valid_kwargs = ImagesKwargs
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -46,9 +51,9 @@ class BaseImageProcessor(ImageProcessingMixin):
         """
         return False
 
-    def __call__(self, images, **kwargs) -> BatchFeature:
+    def __call__(self, images, *args, **kwargs: Unpack[ImagesKwargs]) -> BatchFeature:
         """Preprocess an image or a batch of images."""
-        return self.preprocess(images, **kwargs)
+        return self.preprocess(images, *args, **kwargs)
 
     def preprocess(self, images, **kwargs) -> BatchFeature:
         raise NotImplementedError("Each image processor must implement its own preprocess method")

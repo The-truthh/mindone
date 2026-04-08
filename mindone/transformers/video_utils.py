@@ -24,8 +24,8 @@ from io import BytesIO
 from typing import Callable, NewType, Optional, Union
 from urllib.parse import urlparse
 
+import httpx
 import numpy as np
-import requests
 from transformers.utils import logging
 
 from .image_transforms import PaddingMode, to_channel_dimension_format
@@ -102,6 +102,13 @@ class VideoMetadata(Mapping):
         if self.fps is None or self.frames_indices is None:
             raise ValueError("Cannot infer video `timestamps` when `fps` or `frames_indices` is None.")
         return [frame_idx / self.fps for frame_idx in self.frames_indices]
+
+    @property
+    def sampled_fps(self) -> float:
+        "FPS of the sampled video."
+        if self.frames_indices is None or self.total_num_frames is None or self.fps is None:
+            return self.fps or 24
+        return len(self.frames_indices) / self.total_num_frames * self.fps
 
     def update(self, dictionary):
         for key, value in dictionary.items():
@@ -621,7 +628,7 @@ def load_video(
         bytes_obj = buffer.getvalue()
         file_obj = BytesIO(bytes_obj)
     elif video.startswith("http://") or video.startswith("https://"):
-        file_obj = BytesIO(requests.get(video).content)
+        file_obj = BytesIO(httpx.get(video, follow_redirects=True).content)
     elif os.path.isfile(video):
         file_obj = video
     else:

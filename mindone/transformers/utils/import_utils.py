@@ -222,6 +222,28 @@ def requires_backends(obj, backends):
         raise ImportError("".join(failed))
 
 
+def requires(*, backends=()):
+    """
+    Decorator used to annotate the required optional backends for an object.
+
+    It mirrors the v5 import-utils contract used by processors and image/video utilities
+    without pulling in the full upstream backend/version comparison machinery.
+    """
+
+    if not isinstance(backends, tuple):
+        raise TypeError("Backends should be a tuple.")
+
+    for backend in backends:
+        if backend not in BACKENDS_MAPPING:
+            raise ValueError(f"Backend should be defined in the BACKENDS_MAPPING. Offending backend: {backend}")
+
+    def inner_fn(fun):
+        fun.__backends = list(backends)
+        return fun
+
+    return inner_fn
+
+
 def is_flash_attn_2_available():
     if _is_ascend():
         return True
