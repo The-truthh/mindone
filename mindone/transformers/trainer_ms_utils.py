@@ -201,7 +201,7 @@ def _get_learning_rate(object, global_step):
 
 def save_state(self):
     """
-    Saves the Trainer state, since Trainer.save_model saves only the tokenizer with the model
+    Saves the Trainer state, since Trainer.save_model saves only the processing assets with the model
 
     Under distributed environment this is done only for a process with rank 0.
     """

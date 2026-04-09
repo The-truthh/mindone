@@ -601,7 +601,7 @@ class TrainingArguments:
     warmup_steps: int = field(default=0, metadata={"help": "Linear warmup over warmup_steps."})
 
     log_level: Optional[str] = field(
-        default="info",
+        default="passive",
         metadata={
             "help": (
                 "Logger log level to use on the main node. Possible choices are the log levels as strings: 'debug',"
@@ -684,7 +684,7 @@ class TrainingArguments:
         },
     )
     save_only_model: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": (
                 "When checkpointing, whether to only save the model, or also the optimizer, scheduler & rng state."
@@ -878,7 +878,7 @@ class TrainingArguments:
         metadata={"help": "Column name with precomputed lengths to use when grouping by length."},
     )
     report_to: Union[None, str, List[str]] = field(
-        default=None, metadata={"help": "The list of integrations to report the results and logs to."}
+        default="none", metadata={"help": "The list of integrations to report the results and logs to."}
     )
     ddp_find_unused_parameters: Optional[bool] = field(
         default=None,
@@ -1245,14 +1245,14 @@ class TrainingArguments:
             self.input_dtype = ms.bfloat16
         os.environ["MINDSPORE_MIXED_PRECISION"] = mixed_precision_dtype
 
-        if self.report_to is None:
-            # logger.info(
-            #     "The default value for the training argument `--report_to` will change in v5 (from all installed "
-            #     "integrations to none). In v5, you will need to use `--report_to all` to get the same behavior as "
-            #     "now. You should start updating your code and make this info disappear :-)."
-            # )
-            # self.report_to = "all"
+        if self.report_to == "all" or self.report_to == ["all"]:
+            from .integrations import get_available_reporting_integrations
+
+            self.report_to = get_available_reporting_integrations()
+        elif self.report_to == "none" or self.report_to == ["none"] or self.report_to is None:
             self.report_to = []
+        elif not isinstance(self.report_to, list):
+            self.report_to = [self.report_to]
 
         if self.warmup_ratio < 0 or self.warmup_ratio > 1:
             raise ValueError("warmup_ratio must lie in range [0,1]")
@@ -1269,7 +1269,13 @@ class TrainingArguments:
             raise NotImplementedError
 
         if self.push_to_hub_token is not None:
-            raise NotImplementedError
+            warnings.warn(
+                "`--push_to_hub_token` is deprecated and will be removed in a future version. Use `--hub_token` instead.",
+                FutureWarning,
+            )
+            if self.hub_token is not None:
+                raise ValueError("Both `hub_token` and deprecated `push_to_hub_token` were provided. Please use only `hub_token`.")
+            self.hub_token = self.push_to_hub_token
 
         if self.push_to_hub_model_id is not None:
             raise NotImplementedError

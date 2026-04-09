@@ -438,6 +438,12 @@ class TrainerCallback:
         """
         pass
 
+    def on_push_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        """
+        Event called before pushing the model to the hub.
+        """
+        pass
+
 
 class CallbackHandler(TrainerCallback):
     """Internal class that just calls the list of callbacks in order."""
@@ -549,6 +555,9 @@ class CallbackHandler(TrainerCallback):
 
     def on_prediction_step(self, args: TrainingArguments, state: TrainerState, control: TrainerControl):
         return self.call_event("on_prediction_step", args, state, control)
+
+    def on_push_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        return self.call_event("on_push_begin", args, state, control, **kwargs)
 
     def call_event(self, event, args, state, control, **kwargs):
         for callback in self.callbacks:
@@ -683,12 +692,11 @@ class ProgressCallback(TrainerCallback):
                         f"[String too long to display, length: {len(v)} > {self.max_str_len}. "
                         "Consider increasing `max_str_len` if needed.]"
                     )
+                elif isinstance(v, float):
+                    shallow_logs[k] = f"{v:.4g}"
                 else:
                     shallow_logs[k] = v
             _ = shallow_logs.pop("total_flos", None)
-            # round numbers so that it looks better in console
-            if "epoch" in shallow_logs:
-                shallow_logs["epoch"] = round(shallow_logs["epoch"], 2)
             self.training_bar.write(str(shallow_logs))
 
     def on_train_end(self, args, state, control, **kwargs):
@@ -705,6 +713,8 @@ class PrinterCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         _ = logs.pop("total_flos", None)
         if state.is_local_process_zero:
+            if logs is not None:
+                logs = {k: (f"{v:.4g}" if isinstance(v, float) else v) for k, v in logs.items()}
             print(logs)
 
 

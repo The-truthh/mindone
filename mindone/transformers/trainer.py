@@ -120,6 +120,7 @@ class Trainer:
         train_dataset: Optional[Iterable] = None,
         eval_dataset: Optional[Iterable] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[Any] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -219,15 +220,18 @@ class Trainer:
                 f" to request the support for training support for {model.hf_quantizer.quantization_config.quant_method}"
             )
 
+        active_processing_class = processing_class if processing_class is not None else tokenizer
         default_collator = (
-            DataCollatorWithPadding(tokenizer)
-            if tokenizer is not None and isinstance(tokenizer, (PreTrainedTokenizerBase, SequenceFeatureExtractor))
+            DataCollatorWithPadding(active_processing_class)
+            if active_processing_class is not None
+            and isinstance(active_processing_class, (PreTrainedTokenizerBase, SequenceFeatureExtractor))
             else lambda features, batch_info: default_data_collator(features, return_tensors="np")
         )
         self.data_collator = data_collator if data_collator is not None else default_collator
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.tokenizer = tokenizer
+        self.processing_class = active_processing_class
 
         self.model = model
 
@@ -244,7 +248,7 @@ class Trainer:
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
-            callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
+            callbacks, self.model, self.processing_class, self.optimizer, self.lr_scheduler
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
 
@@ -656,7 +660,11 @@ class Trainer:
                 )
             else:
                 lengths = None
-            model_input_name = self.tokenizer.model_input_names[0] if self.tokenizer is not None else None
+            model_input_name = (
+                self.processing_class.model_input_names[0]
+                if self.processing_class is not None and getattr(self.processing_class, "model_input_names", None)
+                else None
+            )
             return LengthGroupedSampler(
                 self.args.train_batch_size * self.args.gradient_accumulation_steps,
                 dataset=self.train_dataset,
@@ -1034,7 +1042,7 @@ class Trainer:
         self.callback_handler.lr_scheduler = self.lr_scheduler
         self.callback_handler.train_dataloader = train_dataloader
         if self.hp_name is not None and self._trial is not None:
-            # use self._trial because the SigOpt/Optuna hpo only call `_hp_search_setup(trial)` instead of passing trial
+            # use self._trial because the Optuna hpo only call `_hp_search_setup(trial)` instead of passing trial
             # parameter to Train when using DDP.
             self.state.trial_name = self.hp_name(self._trial)
             raise NotImplementedError
@@ -1618,7 +1626,9 @@ class Trainer:
         else:
             self.model.save_pretrained(output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors)
 
-        if self.tokenizer is not None:
+        if self.processing_class is not None:
+            self.processing_class.save_pretrained(output_dir)
+        elif self.tokenizer is not None:
             self.tokenizer.save_pretrained(output_dir)
 
         # TODO: save args
