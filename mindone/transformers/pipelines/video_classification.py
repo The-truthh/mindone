@@ -18,7 +18,7 @@ import warnings
 from io import BytesIO
 from typing import Any, Optional, Union, overload
 
-import requests
+import httpx
 from transformers.utils import add_end_docstrings, is_av_available, logging, requires_backends
 
 from .base import Pipeline, build_pipeline_init_args
@@ -92,11 +92,11 @@ class VideoClassificationPipeline(Pipeline):
             inputs (`str`, `list[str]`):
                 The pipeline handles three types of videos:
 
-                - A string containing a http link pointing to a video
+                - A string containing a HTTP(S) link pointing to a video
                 - A string containing a local path to a video
 
                 The pipeline accepts either a single video or a batch of videos, which must then be passed as a string.
-                Videos in a batch must all be in the same format: all as http links or all as local paths.
+                Videos in a batch must all be in the same format: all as HTTP(S) links or all as local paths.
             top_k (`int`, *optional*, defaults to 5):
                 The number of top labels that will be returned by the pipeline. If the provided number is higher than
                 the number of labels available in the model configuration, it will default to the number of labels.
@@ -125,7 +125,7 @@ class VideoClassificationPipeline(Pipeline):
         # After deprecation of this is completed, remove the default `None` value for `images`
         if "videos" in kwargs:
             warnings.warn(
-                "The `videos` argument has been renamed to `inputs`. In version 5 of Transformers, `videos` will no longer be accepted",
+                "The `videos` argument has been renamed to `inputs`.",
                 FutureWarning,
             )
             inputs = kwargs.pop("videos")
@@ -138,7 +138,7 @@ class VideoClassificationPipeline(Pipeline):
             num_frames = self.model.config.num_frames
 
         if video.startswith("http://") or video.startswith("https://"):
-            video = BytesIO(requests.get(video).content)
+            video = BytesIO(httpx.get(video, follow_redirects=True).content)
 
         container = av.open(video)
 

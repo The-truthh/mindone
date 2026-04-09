@@ -178,7 +178,7 @@ class TextGenerationPipeline(Pipeline):
             preprocess_params["prefix"] = prefix
         if prefix:
             prefix_inputs = self.tokenizer(
-                prefix, padding=False, add_special_tokens=add_special_tokens, return_tensors=self.framework
+                prefix, padding=False, add_special_tokens=add_special_tokens, return_tensors="np"
             )
             generate_kwargs["prefix_length"] = prefix_inputs["input_ids"].shape[-1]
 
@@ -298,8 +298,7 @@ class TextGenerationPipeline(Pipeline):
                 Additional keyword arguments to pass along to the encoding step of the tokenizer. If the text input is
                 a chat, it is passed to `apply_chat_template`. Otherwise, it is passed to `__call__`.
             generate_kwargs (`dict`, *optional*):
-                Additional keyword arguments to pass along to the generate method of the model (see the generate method
-                corresponding to your framework [here](./text_generation)).
+                Additional keyword arguments to pass along to the generate method of the model.
 
         Return:
             A list or a list of lists of `dict`: Returns one of the following dictionaries (cannot return a combination
@@ -366,7 +365,7 @@ class TextGenerationPipeline(Pipeline):
                 add_generation_prompt=not continue_final_message,
                 continue_final_message=continue_final_message,
                 return_dict=True,
-                return_tensors=self.framework,
+                return_tensors="np",
                 **tokenizer_kwargs,
             )
         else:

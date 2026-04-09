@@ -59,7 +59,7 @@ class AggregationStrategy(ExplicitEnum):
         ignore_labels (`list[str]`, defaults to `["O"]`):
             A list of labels to ignore.
         grouped_entities (`bool`, *optional*, defaults to `False`):
-            DEPRECATED, use `aggregation_strategy` instead. Whether or not to group the tokens corresponding to the
+            Deprecated, use `aggregation_strategy` instead. Whether or not to group the tokens corresponding to the
             same entity together in the predictions or not.
         stride (`int`, *optional*):
             If stride is provided, the pipeline is applied on all the text. The text is split into chunks of size
@@ -179,12 +179,12 @@ class TokenClassificationPipeline(ChunkPipeline):
 
             if grouped_entities is not None:
                 warnings.warn(
-                    "`grouped_entities` is deprecated and will be removed in version v5.0.0, defaulted to"
+                    "`grouped_entities` is deprecated, defaulted to"
                     f' `aggregation_strategy="{aggregation_strategy}"` instead.'
                 )
             if ignore_subwords is not None:
                 warnings.warn(
-                    "`ignore_subwords` is deprecated and will be removed in version v5.0.0, defaulted to"
+                    "`ignore_subwords` is deprecated, defaulted to"
                     f' `aggregation_strategy="{aggregation_strategy}"` instead.'
                 )
 

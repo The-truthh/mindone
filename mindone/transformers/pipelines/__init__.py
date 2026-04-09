@@ -33,9 +33,6 @@ from transformers.utils import (
     logging,
 )
 
-# Local definition for removed API in v5.0.0
-HUGGINGFACE_CO_RESOLVE_ENDPOINT = "https://huggingface.co"
-
 from mindone.transformers.models.auto.feature_extraction_auto import AutoFeatureExtractor
 from mindone.transformers.models.auto.image_processing_auto import AutoImageProcessor
 from mindone.transformers.models.auto.processing_auto import AutoProcessor
@@ -286,8 +283,7 @@ SUPPORTED_TASKS = {
     },
     "keypoint-matching": {
         "impl": KeypointMatchingPipeline,
-        "tf": (),
-        "pt": (AutoModelForKeypointMatching,) if is_mindspore_available() else (),
+        "ms": (AutoModelForKeypointMatching,) if is_mindspore_available() else (),
         "default": {"model": {"ms": ("magic-leap-community/superglue_outdoor", "f4041f8")}},
         "type": "image",
     },
@@ -304,16 +300,6 @@ def get_supported_tasks() -> list[str]:
 
 
 def get_task(model: str, token: Optional[str] = None, **deprecated_kwargs) -> str:
-    use_auth_token = deprecated_kwargs.pop("use_auth_token", None)
-    if use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-            FutureWarning,
-        )
-        if token is not None:
-            raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
-        token = use_auth_token
-
     if is_offline_mode():
         raise RuntimeError("You cannot infer task automatically within `pipeline` when using offline mode")
     try:
@@ -341,7 +327,6 @@ def check_task(task: str) -> tuple[str, dict, Any]:
 
             - `"audio-classification"`
             - `"automatic-speech-recognition"`
-            - `"conversational"`
             - `"depth-estimation"`
             - `"document-question-answering"`
             - `"feature-extraction"`
@@ -349,19 +334,19 @@ def check_task(task: str) -> tuple[str, dict, Any]:
             - `"image-classification"`
             - `"image-feature-extraction"`
             - `"image-segmentation"`
+            - `"image-text-to-text"`
             - `"image-to-text"`
             - `"image-to-image"`
+            - `"keypoint-matching"`
+            - `"mask-generation"`
             - `"object-detection"`
             - `"question-answering"`
-            - `"summarization"`
             - `"table-question-answering"`
             - `"text2text-generation"`
             - `"text-classification"` (alias `"sentiment-analysis"` available)
             - `"text-generation"`
             - `"text-to-audio"` (alias `"text-to-speech"` available)
             - `"token-classification"` (alias `"ner"` available)
-            - `"translation"`
-            - `"translation_xx_to_yy"`
             - `"video-classification"`
             - `"visual-question-answering"` (alias `"vqa"` available)
             - `"zero-shot-classification"`
@@ -371,7 +356,7 @@ def check_task(task: str) -> tuple[str, dict, Any]:
     Returns:
         (normalized_task: `str`, task_defaults: `dict`, task_options: (`tuple`, None)) The normalized task name
         (removed alias and options). The actual dictionary required to initialize the pipeline and some extra task
-        options for parametrized tasks like "translation_xx_to_yy"
+        options for parametrized tasks
 
 
     """
@@ -383,14 +368,11 @@ def clean_custom_task(task_info):
 
     if "impl" not in task_info:
         raise RuntimeError("This model introduces a custom pipeline without specifying its implementation.")
-    pt_class_names = task_info.get("ms", ())
-    if isinstance(pt_class_names, str):
-        pt_class_names = [pt_class_names]
-    task_info["ms"] = tuple(getattr(transformers, c) for c in pt_class_names)
-    tf_class_names = task_info.get("tf", ())
-    if isinstance(tf_class_names, str):
-        tf_class_names = [tf_class_names]
-    task_info["tf"] = tuple(getattr(transformers, c) for c in tf_class_names)
+    ms_class_names = task_info.get("ms", ())
+    if isinstance(ms_class_names, str):
+        ms_class_names = [ms_class_names]
+    task_info["ms"] = tuple(getattr(transformers, c) for c in ms_class_names)
+    task_info.pop("tf", None)
     return task_info, None
 
 
@@ -743,7 +725,6 @@ def pipeline(
             - `"mask-generation"`: will return a [`MaskGenerationPipeline`].
             - `"object-detection"`: will return a [`ObjectDetectionPipeline`].
             - `"question-answering"`: will return a [`QuestionAnsweringPipeline`].
-            - `"summarization"`: will return a [`SummarizationPipeline`].
             - `"table-question-answering"`: will return a [`TableQuestionAnsweringPipeline`].
             - `"text2text-generation"`: will return a [`Text2TextGenerationPipeline`].
             - `"text-classification"` (alias `"sentiment-analysis"` available): will return a
@@ -751,8 +732,6 @@ def pipeline(
             - `"text-generation"`: will return a [`TextGenerationPipeline`]:.
             - `"text-to-audio"` (alias `"text-to-speech"` available): will return a [`TextToAudioPipeline`]:.
             - `"token-classification"` (alias `"ner"` available): will return a [`TokenClassificationPipeline`].
-            - `"translation"`: will return a [`TranslationPipeline`].
-            - `"translation_xx_to_yy"`: will return a [`TranslationPipeline`].
             - `"video-classification"`: will return a [`VideoClassificationPipeline`].
             - `"visual-question-answering"`: will return a [`VisualQuestionAnsweringPipeline`].
             - `"zero-shot-classification"`: will return a [`ZeroShotClassificationPipeline`].
@@ -823,7 +802,7 @@ def pipeline(
             artifacts on huggingface.co, so `revision` can be any identifier allowed by git.
         use_fast (`bool`, *optional*, defaults to `True`):
             Whether or not to use a Fast tokenizer if possible (a [`PreTrainedTokenizerFast`]).
-        use_auth_token (`str` or *bool*, *optional*):
+        token (`str` or *bool*, *optional*):
             The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
             when running `hf auth login` (stored in `~/.huggingface`).
 
@@ -864,17 +843,6 @@ def pipeline(
     ```"""
     if model_kwargs is None:
         model_kwargs = {}
-    # Make sure we only pass use_auth_token once as a kwarg (it used to be possible to pass it in model_kwargs,
-    # this is to keep BC).
-    use_auth_token = model_kwargs.pop("use_auth_token", None)
-    if use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-            FutureWarning,
-        )
-        if token is not None:
-            raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
-        token = use_auth_token
 
     code_revision = kwargs.pop("code_revision", None)
     commit_hash = kwargs.pop("_commit_hash", None)
@@ -993,8 +961,7 @@ def pipeline(
         model, default_revision = get_default_model_and_revision(targeted_task, framework, task_options)
         revision = revision if revision is not None else default_revision
         logger.warning(
-            f"No model was supplied, defaulted to {model} and revision"
-            f" {revision} ({HUGGINGFACE_CO_RESOLVE_ENDPOINT}/{model}).\n"
+            f"No model was supplied, defaulted to {model} and revision {revision}.\n"
             "Using a pipeline without specifying a model name and revision in production is not recommended."
         )
         hub_kwargs["revision"] = revision
@@ -1205,16 +1172,6 @@ def pipeline(
                 raise e
             else:
                 processor = None
-
-    if task == "translation" and model.config.task_specific_params:
-        for key in model.config.task_specific_params:
-            if key.startswith("translation"):
-                task = key
-                warnings.warn(
-                    f'"translation" task was used, instead of "translation_XX_to_YY", defaulting to "{task}"',
-                    UserWarning,
-                )
-                break
 
     if tokenizer is not None:
         kwargs["tokenizer"] = tokenizer

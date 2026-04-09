@@ -202,6 +202,7 @@ class ImageTextToTextPipeline(Pipeline):
         skip_special_tokens=None,
         **kwargs: Unpack[ProcessingKwargs],
     ):
+        generate_kwargs = {} if generate_kwargs is None else generate_kwargs
         forward_kwargs = {}
         preprocess_params = {}
         postprocess_params = {}
@@ -214,17 +215,15 @@ class ImageTextToTextPipeline(Pipeline):
             preprocess_params["continue_final_message"] = continue_final_message
 
         # Forward kwargs
-        if generate_kwargs is not None:
-            forward_kwargs["generate_kwargs"] = generate_kwargs
         if stop_sequence is not None:
             stop_sequence_ids = self.processor.tokenizer.encode(stop_sequence, add_special_tokens=False)
             if len(stop_sequence_ids) > 1:
                 logger.warning_once(
                     "Stopping on a multiple token sequence is not yet supported on transformers. The first token of"
                     " the stop sequence will be used as the stop sequence string in the interim."
-                )
+            )
             generate_kwargs["eos_token_id"] = stop_sequence_ids[0]
-        if generate_kwargs is not None:
+        if generate_kwargs:
             forward_kwargs["generate_kwargs"] = generate_kwargs
         if max_new_tokens is not None:
             if "generate_kwargs" not in forward_kwargs:
@@ -328,7 +327,7 @@ class ImageTextToTextPipeline(Pipeline):
             return a combination of both `generated_text` and `generated_token_ids`):
 
             - **generated_text** (`str`, present when `return_text=True`) -- The generated text.
-            - **generated_token_ids** (`torch.Tensor`, present when `return_tensors=True`) -- The token
+            - **generated_token_ids** (`mindspore.Tensor`, present when `return_tensors=True`) -- The token
                 ids of the generated text.
             - **input_text** (`str`) -- The input text.
         """

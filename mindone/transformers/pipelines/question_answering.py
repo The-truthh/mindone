@@ -177,14 +177,14 @@ class QuestionAnsweringArgumentHandler(ArgumentHandler):
         # Batched data
         elif "X" in kwargs:
             warnings.warn(
-                "Passing the `X` argument to the pipeline is deprecated and will be removed in v5. "
+                "Passing the `X` argument to the pipeline is deprecated. "
                 "Inputs should be passed using the `question` and `context` keyword arguments instead.",
                 FutureWarning,
             )
             inputs = kwargs["X"]
         elif "data" in kwargs:
             warnings.warn(
-                "Passing the `data` argument to the pipeline is deprecated and will be removed in v5. "
+                "Passing the `data` argument to the pipeline is deprecated. "
                 "Inputs should be passed using the `question` and `context` keyword arguments instead.",
                 FutureWarning,
             )
@@ -322,7 +322,7 @@ class QuestionAnsweringPipeline(ChunkPipeline):
 
         postprocess_params = {}
         if topk is not None and top_k is None:
-            warnings.warn("topk parameter is deprecated, use top_k instead", UserWarning)
+            warnings.warn("`topk` is deprecated, use `top_k` instead.", UserWarning)
             top_k = topk
         if top_k is not None:
             if top_k < 1:
@@ -379,7 +379,7 @@ class QuestionAnsweringPipeline(ChunkPipeline):
         # Convert inputs to features
         if args:
             warnings.warn(
-                "Passing a list of SQuAD examples to the pipeline is deprecated and will be removed in v5. "
+                "Passing a list of SQuAD examples to the pipeline is deprecated. "
                 "Inputs should be passed using the `question` and `context` keyword arguments instead.",
                 FutureWarning,
             )

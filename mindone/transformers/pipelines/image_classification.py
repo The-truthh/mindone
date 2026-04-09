@@ -136,12 +136,12 @@ class ImageClassificationPipeline(Pipeline):
             inputs (`str`, `List[str]`, `PIL.Image` or `List[PIL.Image]`):
                 The pipeline handles three types of images:
 
-                - A string containing a http link pointing to an image
+                - A string containing a HTTP(S) link pointing to an image
                 - A string containing a local path to an image
                 - An image loaded in PIL directly
 
                 The pipeline accepts either a single image or a batch of images, which must then be passed as a string.
-                Images in a batch must all be in the same format: all as http links, all as local paths, or all as PIL
+                Images in a batch must all be in the same format: all as HTTP(S) links, all as local paths, or all as PIL
                 images.
             function_to_apply (`str`, *optional*, defaults to `"default"`):
                 The function to apply to the model outputs in order to retrieve the scores. Accepts four different

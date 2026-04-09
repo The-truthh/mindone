@@ -201,7 +201,7 @@ def infer_framework_load_model(
     actually a checkpoint name and this method will try to instantiate it using `model_classes`. Since we don't want to
     instantiate the model twice, this model is returned for use by the pipeline.
 
-    If both frameworks are installed and available for `model`, MindSpore is selected.
+    MindOne pipelines only support MindSpore models.
 
     Args:
         model (`str`, [`PreTrainedModel`]):
@@ -251,8 +251,6 @@ def infer_framework_load_model(
             kwargs = model_kwargs.copy()
             if framework == "ms" and model.endswith(".h5"):
                 raise NotImplementedError
-            elif framework == "tf" and model.endswith(".bin"):
-                raise NotImplementedError
 
             try:
                 model = model_class.from_pretrained(model, **kwargs)
@@ -266,7 +264,7 @@ def infer_framework_load_model(
                 # we can transparently retry the load in float32 before surfacing an error to the user.
                 fallback_tried = False
                 if is_mindspore_available() and ("dtype" in kwargs):
-                    import mindspore as ms  # local import to avoid unnecessarily importing torch for TF/JAX users
+                    import mindspore as ms  # local import to avoid unnecessary framework imports
 
                     fallback_tried = True
                     fp32_kwargs = kwargs.copy()
@@ -318,7 +316,7 @@ def infer_framework_from_model(
     actually a checkpoint name and this method will try to instantiate it using `model_classes`. Since we don't want to
     instantiate the model twice, this model is returned for use by the pipeline.
 
-    If both frameworks are installed and available for `model`, MindSpore is selected.
+    MindOne pipelines only support MindSpore models.
 
     Args:
         model (`str`, [`PreTrainedModel`]):
@@ -372,7 +370,7 @@ def get_default_model_and_revision(
     targeted_task: dict, framework: Optional[str], task_options: Optional[Any]
 ) -> Union[str, tuple[str, str]]:
     """
-    Select a default model to use for a given task. Defaults to pytorch if ambiguous.
+    Select a default model to use for a given task.
 
     Args:
         targeted_task (`dict`):
@@ -1016,19 +1014,6 @@ class Pipeline(_ScikitCompat, PushToHubMixin):
             kwargs (`dict[str, Any]`, *optional*):
                 Additional key word arguments passed along to the [`~utils.PushToHubMixin.push_to_hub`] method.
         """
-        use_auth_token = kwargs.pop("use_auth_token", None)
-
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                FutureWarning,
-            )
-            if kwargs.get("token") is not None:
-                raise ValueError(
-                    "`token` and `use_auth_token` are both specified. Please set only the argument `token`."
-                )
-            kwargs["token"] = use_auth_token
-
         if os.path.isfile(save_directory):
             logger.error(f"Provided path ({save_directory}) should be a directory, not a file")
             return
@@ -1377,44 +1362,28 @@ class PipelineRegistry:
             targeted_task = self.supported_tasks[task]
             return task, targeted_task, None
 
-        if task.startswith("translation"):
-            tokens = task.split("_")
-            if len(tokens) == 4 and tokens[0] == "translation" and tokens[2] == "to":
-                targeted_task = self.supported_tasks["translation"]
-                task = "translation"
-                return task, targeted_task, (tokens[1], tokens[3])
-            raise KeyError(f"Invalid translation task {task}, use 'translation_XX_to_YY' format")
-
-        raise KeyError(
-            f"Unknown task {task}, available tasks are {self.get_supported_tasks() + ['translation_XX_to_YY']}"
-        )
+        raise KeyError(f"Unknown task {task}, available tasks are {self.get_supported_tasks()}")
 
     def register_pipeline(
         self,
         task: str,
         pipeline_class: type,
-        pt_model: Optional[Union[type, tuple[type]]] = None,
-        tf_model: Optional[Union[type, tuple[type]]] = None,
+        ms_model: Optional[Union[type, tuple[type]]] = None,
         default: Optional[dict] = None,
         type: Optional[str] = None,
     ) -> None:
         if task in self.supported_tasks:
             logger.warning(f"{task} is already registered. Overwriting pipeline for task {task}...")
 
-        if pt_model is None:
-            pt_model = ()
-        elif not isinstance(pt_model, tuple):
-            pt_model = (pt_model,)
+        if ms_model is None:
+            ms_model = ()
+        elif not isinstance(ms_model, tuple):
+            ms_model = (ms_model,)
 
-        if tf_model is None:
-            tf_model = ()
-        elif not isinstance(tf_model, tuple):
-            tf_model = (tf_model,)
-
-        task_impl = {"impl": pipeline_class, "ms": pt_model, "tf": tf_model}
+        task_impl = {"impl": pipeline_class, "ms": ms_model}
 
         if default is not None:
-            if "model" not in default and ("ms" in default or "tf" in default):
+            if "model" not in default and "ms" in default:
                 default = {"model": default}
             task_impl["default"] = default
 

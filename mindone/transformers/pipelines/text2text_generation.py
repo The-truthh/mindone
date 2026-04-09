@@ -1,5 +1,4 @@
-"""Adapted from https://github.com/huggingface/transformers/tree/main/src/transformers/pipelines/text2text_generation.py.
-deprecated file in v4.57.1"""
+"""Compatibility text2text pipeline definitions for MindOne."""
 
 import enum
 import warnings
@@ -48,7 +47,7 @@ class Text2TextGenerationPipeline(Pipeline):
     This Text2TextGenerationPipeline pipeline can currently be loaded from [`pipeline`] using the following task
     identifier: `"text2text-generation"`.
 
-    The models that this pipeline can use are models that have been fine-tuned on a translation task. See the
+    The models that this pipeline can use are models that have been fine-tuned on a seq2seq text generation task. See the
     up-to-date list of available models on
     [huggingface.co/models](https://huggingface.co/models?filter=text2text-generation). For a list of available
     parameters, see the [following
@@ -158,8 +157,7 @@ class Text2TextGenerationPipeline(Pipeline):
                 (default) will never truncate, but it is sometimes desirable to truncate the input to fit the model's
                 max_length instead of throwing an error down the line.
             generate_kwargs:
-                Additional keyword arguments to pass along to the generate method of the model (see the generate method
-                corresponding to your framework [here](./text_generation)).
+                Additional keyword arguments to pass along to the generate method of the model.
 
         Return:
             A list or a list of list of `dict`: Each result comes as a dictionary with the following keys:
@@ -222,10 +220,7 @@ class Text2TextGenerationPipeline(Pipeline):
 @add_end_docstrings(build_pipeline_init_args(has_tokenizer=True))
 class SummarizationPipeline(Text2TextGenerationPipeline):
     """
-    Summarize news articles and other documents.
-
-    This summarizing pipeline can currently be loaded from [`pipeline`] using the following task identifier:
-    `"summarization"`.
+    Legacy summarization compatibility pipeline.
 
     The models that this pipeline can use are models that have been fine-tuned on a summarization task, which is
     currently, '*bart-large-cnn*', '*google-t5/t5-small*', '*google-t5/t5-base*', '*google-t5/t5-large*',
@@ -234,17 +229,7 @@ class SummarizationPipeline(Text2TextGenerationPipeline):
     of available parameters, see the [following
     documentation](https://huggingface.co/docs/transformers/en/main_classes/text_generation#transformers.generation.GenerationMixin.generate)
 
-    Usage:
-
-    ```python
-    # use bart in mindspore
-    summarizer = pipeline("summarization")
-    summarizer("An apple a day, keeps the doctor away", min_length=5, max_length=20)
-
-    # use t5 in tf
-    summarizer = pipeline("summarization", model="google-t5/t5-base", tokenizer="google-t5/t5-base", framework="tf")
-    summarizer("An apple a day, keeps the doctor away", min_length=5, max_length=20)
-    ```"""
+    This class is kept as a compatibility layer and is not re-registered as a top-level pipeline task."""
 
     # Used in the return key of the pipeline.
     return_name = "summary"
@@ -263,8 +248,7 @@ class SummarizationPipeline(Text2TextGenerationPipeline):
             clean_up_tokenization_spaces (`bool`, *optional*, defaults to `False`):
                 Whether or not to clean up the potential extra spaces in the text output.
             generate_kwargs:
-                Additional keyword arguments to pass along to the generate method of the model (see the generate method
-                corresponding to your framework [here](./text_generation)).
+                Additional keyword arguments to pass along to the generate method of the model.
 
         Return:
             A list or a list of list of `dict`: Each result comes as a dictionary with the following keys:
@@ -279,42 +263,35 @@ class SummarizationPipeline(Text2TextGenerationPipeline):
         """
         Checks whether there might be something wrong with given input with regard to the model.
         """
-        if max_length < min_length:
+        if max_length is not None and min_length is not None and max_length < min_length:
             logger.warning(f"Your min_length={min_length} must be inferior than your max_length={max_length}.")
 
-        if input_length < max_length:
+        if max_length is not None and input_length < max_length:
             logger.warning(
                 f"Your max_length is set to {max_length}, but your input_length is only {input_length}. Since this is "
                 "a summarization task, where outputs shorter than the input are typically wanted, you might "
                 f"consider decreasing max_length manually, e.g. summarizer('...', max_length={input_length//2})"
             )
+        return True
 
 
 @add_end_docstrings(build_pipeline_init_args(has_tokenizer=True))
 class TranslationPipeline(Text2TextGenerationPipeline):
     """
-    Translates from one language to another.
-
-    This translation pipeline can currently be loaded from [`pipeline`] using the following task identifier:
-    `"translation_xx_to_yy"`.
+    Legacy translation compatibility pipeline.
 
     The models that this pipeline can use are models that have been fine-tuned on a translation task. See the
     up-to-date list of available models on [huggingface.co/models](https://huggingface.co/models?filter=translation).
     For a list of available parameters, see the [following
     documentation](https://huggingface.co/docs/transformers/en/main_classes/text_generation#transformers.generation.GenerationMixin.generate)
 
-    Usage:
-
-    ```python
-    en_fr_translator = pipeline("translation_en_to_fr")
-    en_fr_translator("How old are you?")
-    ```"""
+    This class is kept as a compatibility layer and is not re-registered as a top-level pipeline task."""
 
     # Used in the return key of the pipeline.
     return_name = "translation"
 
     def check_inputs(self, input_length: int, min_length: int, max_length: int):
-        if input_length > 0.9 * max_length:
+        if max_length is not None and input_length > 0.9 * max_length:
             logger.warning(
                 f"Your input_length: {input_length} is bigger than 0.9 * max_length: {max_length}. You might consider "
                 "increasing your max_length manually, e.g. translator('...', max_length=400)"
@@ -323,9 +300,14 @@ class TranslationPipeline(Text2TextGenerationPipeline):
 
     def preprocess(self, *args, truncation=TruncationStrategy.DO_NOT_TRUNCATE, src_lang=None, tgt_lang=None):
         if getattr(self.tokenizer, "_build_translation_inputs", None):
-            return self.tokenizer._build_translation_inputs(
-                *args, return_tensors=self.framework, truncation=truncation, src_lang=src_lang, tgt_lang=tgt_lang
+            inputs = self.tokenizer._build_translation_inputs(
+                *args, return_tensors="np", truncation=truncation, src_lang=src_lang, tgt_lang=tgt_lang
             )
+            for key, value in inputs.items():
+                inputs[key] = ms.tensor(value)
+            if "token_type_ids" in inputs:
+                del inputs["token_type_ids"]
+            return inputs
         else:
             return super()._parse_and_tokenize(*args, truncation=truncation)
 
@@ -365,8 +347,7 @@ class TranslationPipeline(Text2TextGenerationPipeline):
                 The language of the desired output. Might be required for multilingual models. Will not have any effect
                 for single pair translation models
             generate_kwargs:
-                Additional keyword arguments to pass along to the generate method of the model (see the generate method
-                corresponding to your framework [here](./text_generation)).
+                Additional keyword arguments to pass along to the generate method of the model.
 
         Return:
             A list or a list of list of `dict`: Each result comes as a dictionary with the following keys:

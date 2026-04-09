@@ -20,7 +20,6 @@
 import importlib
 import json
 import os
-import warnings
 from collections import OrderedDict
 from typing import Dict, Optional, Union
 
@@ -30,7 +29,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module, res
 from transformers.utils import CONFIG_NAME, cached_file
 
 from ...feature_extraction_utils import FeatureExtractionMixin
-from ...utils import FEATURE_EXTRACTOR_NAME, logging
+from ...utils import FEATURE_EXTRACTOR_NAME, PROCESSOR_NAME, logging
 from .auto_factory import _LazyAutoMapping
 from .configuration_auto import (
     CONFIG_MAPPING_NAMES,
@@ -86,7 +85,6 @@ def get_feature_extractor_config(
     pretrained_model_name_or_path: Union[str, os.PathLike],
     cache_dir: Optional[Union[str, os.PathLike]] = None,
     force_download: bool = False,
-    resume_download: Optional[bool] = None,
     proxies: Optional[Dict[str, str]] = None,
     token: Optional[Union[bool, str]] = None,
     revision: Optional[str] = None,
@@ -111,9 +109,6 @@ def get_feature_extractor_config(
         force_download (`bool`, *optional*, defaults to `False`):
             Whether or not to force to (re-)download the configuration files and override the cached versions if they
             exist.
-        resume_download:
-            Deprecated and ignored. All downloads are now resumed by default when possible.
-            Will be removed in v5 of Transformers.
         proxies (`Dict[str, str]`, *optional*):
             A dictionary of proxy servers to use by protocol or endpoint, e.g., `{'http': 'foo.bar:3128',
             'http://hostname': 'foo.bar:4012'}.` The proxies are used on each request.
@@ -151,22 +146,23 @@ def get_feature_extractor_config(
     tokenizer.save_pretrained("tokenizer-test")
     tokenizer_config = get_tokenizer_config("tokenizer-test")
     ```"""
-    use_auth_token = kwargs.pop("use_auth_token", None)
-    if use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-            FutureWarning,
-        )
-        if token is not None:
-            raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
-        token = use_auth_token
-
+    resolved_processor_file = cached_file(
+        pretrained_model_name_or_path,
+        PROCESSOR_NAME,
+        cache_dir=cache_dir,
+        force_download=force_download,
+        proxies=proxies,
+        token=token,
+        revision=revision,
+        local_files_only=local_files_only,
+        _raise_exceptions_for_gated_repo=False,
+        _raise_exceptions_for_missing_entries=False,
+    )
     resolved_config_file = cached_file(
         pretrained_model_name_or_path,
         FEATURE_EXTRACTOR_NAME,
         cache_dir=cache_dir,
         force_download=force_download,
-        resume_download=resume_download,
         proxies=proxies,
         token=token,
         revision=revision,
@@ -175,14 +171,20 @@ def get_feature_extractor_config(
         _raise_exceptions_for_missing_entries=False,
         _raise_exceptions_for_connection_errors=False,
     )
-    if resolved_config_file is None:
-        logger.info(
-            "Could not locate the feature extractor configuration file, will try to use the model config instead."
-        )
+    if not resolved_config_file and not resolved_processor_file:
+        logger.info("Could not locate the feature extractor configuration file, will try to use the model config instead.")
         return {}
 
-    with open(resolved_config_file, encoding="utf-8") as reader:
-        return json.load(reader)
+    feature_extractor_dict = {}
+    if resolved_processor_file is not None:
+        processor_dict, _ = FeatureExtractionMixin.get_feature_extractor_dict(pretrained_model_name_or_path, **kwargs)
+        if "feature_extractor" in processor_dict:
+            feature_extractor_dict = processor_dict["feature_extractor"]
+
+    if resolved_config_file is not None and not feature_extractor_dict:
+        with open(resolved_config_file, encoding="utf-8") as reader:
+            feature_extractor_dict = json.load(reader)
+    return feature_extractor_dict
 
 
 class AutoFeatureExtractor:
@@ -228,9 +230,6 @@ class AutoFeatureExtractor:
             force_download (`bool`, *optional*, defaults to `False`):
                 Whether or not to force to (re-)download the feature extractor files and override the cached versions
                 if they exist.
-            resume_download:
-                Deprecated and ignored. All downloads are now resumed by default when possible.
-                Will be removed in v5 of Transformers.
             proxies (`Dict[str, str]`, *optional*):
                 A dictionary of proxy servers to use by protocol or endpoint, e.g., `{'http': 'foo.bar:3128',
                 'http://hostname': 'foo.bar:4012'}.` The proxies are used on each request.
@@ -272,18 +271,6 @@ class AutoFeatureExtractor:
         >>> # If feature extractor files are in a directory (e.g. feature extractor was saved using *save_pretrained('./test/saved_model/')*)
         >>> # feature_extractor = AutoFeatureExtractor.from_pretrained("./test/saved_model/")
         ```"""
-        use_auth_token = kwargs.pop("use_auth_token", None)
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                FutureWarning,
-            )
-            if kwargs.get("token", None) is not None:
-                raise ValueError(
-                    "`token` and `use_auth_token` are both specified. Please set only the argument `token`."
-                )
-            kwargs["token"] = use_auth_token
-
         config = kwargs.pop("config", None)
         trust_remote_code = kwargs.pop("trust_remote_code", None)
         kwargs["_from_auto"] = True
@@ -319,8 +306,7 @@ class AutoFeatureExtractor:
                 feature_extractor_auto_map, pretrained_model_name_or_path, **kwargs
             )
             _ = kwargs.pop("code_revision", None)
-            if os.path.isdir(pretrained_model_name_or_path):
-                feature_extractor_class.register_for_auto_class()
+            feature_extractor_class.register_for_auto_class()
             return feature_extractor_class.from_dict(config_dict, **kwargs)
         elif feature_extractor_class is not None:
             return feature_extractor_class.from_dict(config_dict, **kwargs)

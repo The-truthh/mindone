@@ -167,7 +167,7 @@ class ZeroShotClassificationPipeline(ChunkPipeline):
             kwargs["multi_label"] = kwargs["multi_class"]
             logger.warning(
                 "The `multi_class` argument has been deprecated and renamed to `multi_label`. "
-                "`multi_class` will be removed in a future version of Transformers."
+                "Use `multi_label` instead."
             )
         preprocess_params = {}
         if "candidate_labels" in kwargs:

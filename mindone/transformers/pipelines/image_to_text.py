@@ -189,7 +189,9 @@ class ImageToTextPipeline(Pipeline):
                 if self.framework == "ms":
                     for k, v in model_inputs.items():
                         model_inputs[k] = ms.tensor(v).to(self.dtype)
-                    text_inputs = ms.tensor(self.tokenizer(prompt, return_tensors="np"))
+                    text_inputs = {
+                        key: ms.tensor(value) for key, value in self.tokenizer(prompt, return_tensors="np").items()
+                    }
                 else:
                     text_inputs = self.tokenizer(prompt, return_tensors="np")
                 model_inputs.update(text_inputs)
@@ -222,10 +224,7 @@ class ImageToTextPipeline(Pipeline):
         if "generation_config" not in generate_kwargs:
             generate_kwargs["generation_config"] = self.generation_config
 
-        # FIXME: We need to pop here due to a difference in how `generation.py` and `generation.tf_utils.py`
-        #  parse inputs. In the Tensorflow version, `generate` raises an error if we don't use `input_ids` whereas
-        #  the PyTorch version matches it with `self.model.main_input_name` or `self.model.encoder.main_input_name`
-        #  in the `_prepare_model_inputs` method.
+        # Align with the local generation entrypoint by passing the main input positionally.
         inputs = model_inputs.pop(self.model.main_input_name)
         model_outputs = self.model.generate(inputs, **model_inputs, **generate_kwargs)
         return model_outputs
