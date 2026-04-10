@@ -62,18 +62,8 @@ if TYPE_CHECKING and _has_neptune:
         except importlib.metadata.PackageNotFoundError:
             _has_neptune = False
 
-from transformers.utils import ENV_VARS_TRUE_VALUES  # noqa: E402
-
-
 # Integration functions:
 def is_wandb_available():
-    # any value of WANDB_DISABLED disables wandb
-    if os.getenv("WANDB_DISABLED", "").upper() in ENV_VARS_TRUE_VALUES:
-        logger.warning(
-            "Using the `WANDB_DISABLED` environment variable is deprecated and will be removed in v5. Use the "
-            "--report_to flag to control the integrations used for logging result (for instance --report_to none)."
-        )
-        return False
     if importlib.util.find_spec("wandb") is not None:
         import wandb
 
@@ -93,13 +83,6 @@ def is_clearml_available():
 
 
 def is_comet_available():
-    if os.getenv("COMET_MODE", "").upper() == "DISABLED":
-        logger.warning(
-            "Using the `COMET_MODE=DISABLED` environment variable is deprecated and will be removed in v5. Use the "
-            "--report_to flag to control the integrations used for logging result (for instance --report_to none)."
-        )
-        return False
-
     if _is_comet_installed is False:
         return False
 
@@ -244,9 +227,9 @@ def get_reporting_integration_callbacks(report_to):
         return []
 
     if isinstance(report_to, str):
-        if "none" == report_to:
+        if report_to == "none":
             return []
-        elif "all" == report_to:
+        elif report_to == "all":
             report_to = get_available_reporting_integrations()
         else:
             report_to = [report_to]

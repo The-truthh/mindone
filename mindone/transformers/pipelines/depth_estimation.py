@@ -26,7 +26,7 @@ class DepthEstimationPipeline(Pipeline):
     >>> from mindone.transformers import pipeline
 
     >>> depth_estimator = pipeline(task="depth-estimation", model="LiheYoung/depth-anything-base-hf")
-    >>> output = depth_estimator("http://images.cocodataset.org/val2017/000000039769.jpg")
+    >>> output = depth_estimator("https://images.cocodataset.org/val2017/000000039769.jpg")
     >>> # This is a tensor with the values being the depth expressed in meters for each pixel
     >>> output["predicted_depth"].shape
     [480, 640]
@@ -69,12 +69,12 @@ class DepthEstimationPipeline(Pipeline):
             inputs (`str`, `list[str]`, `PIL.Image` or `list[PIL.Image]`):
                 The pipeline handles three types of images:
 
-                - A string containing a http link pointing to an image
+                - A string containing an HTTP(S) link pointing to an image
                 - A string containing a local path to an image
                 - An image loaded in PIL directly
 
                 The pipeline accepts either a single image or a batch of images, which must then be passed as a string.
-                Images in a batch must all be in the same format: all as http links, all as local paths, or all as PIL
+                Images in a batch must all be in the same format: all as HTTP(S) links, all as local paths, or all as PIL
                 images.
             parameters (`Dict`, *optional*):
                 A dictionary of argument names to parameter values, to control pipeline behaviour.
@@ -112,9 +112,12 @@ class DepthEstimationPipeline(Pipeline):
     def preprocess(self, image, timeout=None):
         image = load_image(image, timeout)
         try:
-            model_inputs = self.image_processor(images=image, return_tensors=self.framework)
+            model_inputs = self.image_processor(images=image, return_tensors="np")
             if self.framework == "ms":
-                model_inputs = model_inputs.to(self.dtype)
+                import mindspore as ms  # noqa
+
+                for k, v in model_inputs.items():
+                    model_inputs[k] = ms.tensor(v, dtype=self.dtype)
         except ValueError:
             # for transformer image processor compatibility
             # FIXME: consider to drop this branch if all processors are migrated to mindone.transformers in future

@@ -99,6 +99,24 @@ def default_data_collator(features: List[InputDataClass], return_tensors="np") -
         raise ValueError
 
 
+@dataclass
+class DefaultDataCollator(DataCollatorMixin):
+    """
+    Object form of `default_data_collator`.
+
+    Args:
+        return_tensors (`str`, *optional*, defaults to `"np"`):
+            The type of Tensor to return. Allowable values are "np" and "ms".
+    """
+
+    return_tensors: str = "np"
+
+    def __call__(self, features: List[Dict[str, Any]], return_tensors=None) -> Dict[str, Any]:
+        if return_tensors is None:
+            return_tensors = self.return_tensors
+        return default_data_collator(features, return_tensors)
+
+
 def numpy_default_data_collator(features: List[InputDataClass]) -> Dict[str, Any]:
     if not isinstance(features[0], Mapping):
         features = [vars(f) for f in features]
@@ -313,3 +331,70 @@ class DataCollatorForSeq2Seq:
             batch["decoder_input_ids"] = decoder_input_ids
 
         return batch
+
+
+@dataclass
+class DataCollatorForTokenClassification(DataCollatorMixin):
+    """
+    Data collator that dynamically pads token classification batches and aligns labels.
+
+    Args:
+        tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
+            The tokenizer used for encoding the data.
+        padding (`bool`, `str` or [`~utils.PaddingStrategy`], *optional*, defaults to `True`):
+            Padding strategy.
+        max_length (`int`, *optional*):
+            Maximum length of the returned list and optionally padding length.
+        pad_to_multiple_of (`int`, *optional*):
+            If set will pad the sequence to a multiple of the provided value.
+        label_pad_token_id (`int`, *optional*, defaults to -100):
+            The id to use when padding the labels.
+        return_tensors (`str`, *optional*, defaults to `"np"`):
+            The type of Tensor to return. Allowable values are "np" and "ms".
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str, PaddingStrategy] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    label_pad_token_id: int = -100
+    return_tensors: str = "np"
+
+    def _collate(self, features: List[Dict[str, Any]], return_tensors: Optional[str]):
+        label_name = "label" if "label" in features[0] else "labels"
+        labels = [feature[label_name] for feature in features] if label_name in features[0] else None
+        no_labels_features = [{k: v for k, v in feature.items() if k != label_name} for feature in features]
+
+        batch = pad_without_fast_tokenizer_warning(
+            self.tokenizer,
+            no_labels_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=return_tensors if labels is None else None,
+        )
+
+        if labels is None:
+            return batch
+
+        sequence_length = np.array(batch["input_ids"]).shape[1]
+        padding_side = self.tokenizer.padding_side
+        if padding_side == "right":
+            batch["labels"] = [
+                list(label) + [self.label_pad_token_id] * (sequence_length - len(label)) for label in labels
+            ]
+        else:
+            batch["labels"] = [
+                [self.label_pad_token_id] * (sequence_length - len(label)) + list(label) for label in labels
+            ]
+        return batch
+
+    def numpy_call(self, features):
+        batch = self._collate(features, "np")
+        return {k: np.array(v, dtype=np.int64) for k, v in batch.items()}
+
+    def mindspore_call(self, features):
+        import mindspore as ms
+
+        batch = self._collate(features, None)
+        return {k: ms.tensor(v, dtype=ms.int64) for k, v in batch.items()}

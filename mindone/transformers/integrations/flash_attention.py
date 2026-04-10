@@ -78,7 +78,7 @@ def flash_attention_forward(
         value,
         attention_mask,
         is_causal=module.is_causal,
-        dropout=dropout,
+        dropout=dropout if module.training else 0.0,
         softmax_scale=scaling,
         sliding_window=sliding_window,
         softcap=softcap,

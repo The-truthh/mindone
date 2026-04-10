@@ -83,8 +83,6 @@ class ImageToImagePipeline(Pipeline):
 
         if "timeout" in kwargs:
             preprocess_params["timeout"] = kwargs["timeout"]
-        if "head_mask" in kwargs:
-            forward_params["head_mask"] = kwargs["head_mask"]
 
         return preprocess_params, forward_params, postprocess_params
 
@@ -106,12 +104,12 @@ class ImageToImagePipeline(Pipeline):
             images (`str`, `list[str]`, `PIL.Image` or `list[PIL.Image]`):
                 The pipeline handles three types of images:
 
-                - A string containing a http link pointing to an image
+                - A string containing an HTTP(S) link pointing to an image
                 - A string containing a local path to an image
                 - An image loaded in PIL directly
 
                 The pipeline accepts either a single image or a batch of images, which must then be passed as a string.
-                Images in a batch must all be in the same format: all as http links, all as local paths, or all as PIL
+                Images in a batch must all be in the same format: all as HTTP(S) links, all as local paths, or all as PIL
                 images.
             timeout (`float`, *optional*, defaults to None):
                 The maximum time in seconds to wait for fetching images from the web. If None, no timeout is used and
@@ -138,8 +136,10 @@ class ImageToImagePipeline(Pipeline):
 
     def postprocess(self, model_outputs):
         images = []
-        if "reconstruction" in model_outputs.keys():
+        if "reconstruction" in model_outputs:
             outputs = model_outputs.reconstruction
+        else:
+            raise ValueError("ImageToImagePipeline expects model outputs to contain `reconstruction`.")
         for output in outputs:
             output = output.squeeze().float().clamp_(0, 1).numpy()
             output = np.moveaxis(output, source=0, destination=-1)

@@ -183,12 +183,15 @@ class ImageSegmentationPipeline(Pipeline):
             if self.framework == "ms":
                 for k, v in inputs.items():
                     inputs[k] = ms.Tensor(v, dtype=self.dtype)
-            inputs["task_inputs"] = self.tokenizer(
+            task_inputs = self.tokenizer(
                 inputs["task_inputs"],
                 padding="max_length",
                 max_length=self.model.config.task_seq_len,
-                return_tensors=self.framework,
+                return_tensors="np",
             )["input_ids"]
+            if self.framework == "ms":
+                task_inputs = ms.Tensor(task_inputs)
+            inputs["task_inputs"] = task_inputs
         else:
             inputs = self.image_processor(images=[image], return_tensors="np")
             if self.framework == "ms":

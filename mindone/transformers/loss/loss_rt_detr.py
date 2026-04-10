@@ -171,7 +171,10 @@ class RTDetrLoss(nn.Cell):
 
         src_boxes = outputs["pred_boxes"][idx]
         target_boxes = mint.cat([_target["boxes"][i] for _target, (_, i) in zip(targets, indices)], dim=0)
-        ious, _ = box_iou(center_to_corners_format(src_boxes), center_to_corners_format(target_boxes))
+        ious, _ = box_iou(
+            center_to_corners_format(ops.stop_gradient(src_boxes)),
+            center_to_corners_format(target_boxes),
+        )
         ious = ops.stop_gradient(mint.diag(ious))
 
         src_logits = outputs["logits"]
@@ -434,6 +437,7 @@ def RTDetrForObjectDetectionLoss(
     outputs_loss = {}
     outputs_loss["logits"] = logits
     outputs_loss["pred_boxes"] = pred_boxes
+    auxiliary_outputs = None
     if config.auxiliary_loss:
         if denoising_meta_values is not None:
             dn_out_coord, outputs_coord = mint.split(outputs_coord, denoising_meta_values["dn_num_split"], dim=2)

@@ -121,7 +121,7 @@ class ObjectDetectionPipeline(Pipeline):
 
             - **label** (`str`) -- The class label identified by the model.
             - **score** (`float`) -- The score attributed by the model for that label.
-            - **box** (`list[dict[str, int]]`) -- The bounding box of detected object in image's original size.
+            - **box** (`dict[str, int]`) -- The bounding box of detected object in image's original size.
         """
         # After deprecation of this is completed, remove the default `None` value for `images`
         if "images" in kwargs and "inputs" not in kwargs:
@@ -134,7 +134,10 @@ class ObjectDetectionPipeline(Pipeline):
         inputs = self.image_processor(images=[image], return_tensors="np")
         if self.tokenizer is not None:
             inputs = self.tokenizer(text=inputs["words"], boxes=inputs["boxes"], return_tensors="np")
-        inputs = {k: ms.tensor(v).to(self.dtype) for k, v in inputs.items()}
+        inputs = {
+            k: (ms.tensor(v).to(self.dtype) if ms.tensor(v).dtype.is_floating_point else ms.tensor(v))
+            for k, v in inputs.items()
+        }
         inputs["target_size"] = target_size
         return inputs
 

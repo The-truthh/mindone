@@ -24,6 +24,7 @@
 __version__ = "4.57.1"
 import transformers
 from packaging import version
+from transformers.configuration_utils import PreTrainedConfig, PretrainedConfig
 
 from .cache_utils import (
     Cache,
@@ -39,7 +40,16 @@ from .feature_extraction_sequence_utils import SequenceFeatureExtractor
 
 # Feature Extractor
 from .feature_extraction_utils import BatchFeature, FeatureExtractionMixin
-from .generation import CompileConfig
+from .generation import (
+    CompileConfig,
+    GenerationConfig,
+    GenerationMixin,
+    LogitsProcessorList,
+    StoppingCriteriaList,
+    TopHLogitsWarper,
+    WatermarkDetector,
+    WatermarkingConfig,
+)
 from .image_processing_base import ImageProcessingMixin
 from .image_processing_utils import BaseImageProcessor
 from .image_processing_utils_fast import BaseImageProcessorFast
@@ -1686,6 +1696,7 @@ from .pipelines import (
     VisualQuestionAnsweringPipeline,
     pipeline,
 )
+from .optimization import SchedulerType, get_scheduler
 from .processing_utils import ProcessorMixin
 from .trainer import Trainer
 from .training_args import TrainingArguments

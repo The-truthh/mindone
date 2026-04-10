@@ -314,18 +314,11 @@ def load_backbone(config):
     if backbone_config is None and use_timm_backbone is None and backbone_checkpoint is None:
         return AutoBackbone.from_config(config=config, **backbone_kwargs)
 
-    # config from the parent model that has a backbone
+    # MindOne does not support timm-backed backbones. Reject these paths early instead of
+    # forwarding into auto-loading code that assumes PyTorch/timm availability.
     if use_timm_backbone:
-        if backbone_checkpoint is None:
-            raise ValueError("config.backbone must be set if use_timm_backbone is True")
-        # Because of how timm backbones were originally added to models, we need to pass in use_pretrained_backbone
-        # to determine whether to load the pretrained weights.
-        backbone = AutoBackbone.from_pretrained(
-            backbone_checkpoint,
-            use_timm_backbone=use_timm_backbone,
-            use_pretrained_backbone=use_pretrained_backbone,
-            **backbone_kwargs,
-        )
+        raise ValueError("timm backbone is not supported in mindone.transformers")
+    # config from the parent model that has a backbone
     elif use_pretrained_backbone:
         if backbone_checkpoint is None:
             raise ValueError("config.backbone must be set if use_pretrained_backbone is True")
@@ -349,6 +342,9 @@ def verify_backbone_config_arguments(
     """
     Verify that the config arguments to be passed to load_backbone are valid
     """
+    if use_timm_backbone:
+        raise ValueError("timm backbone is not supported in mindone.transformers")
+
     if backbone_config is not None and backbone is not None:
         raise ValueError("You can't specify both `backbone` and `backbone_config`.")
 

@@ -4,8 +4,8 @@ from typing import Optional, Union
 
 import numpy as np
 from transformers import add_end_docstrings
-from transformers.generation import GenerationConfig
 
+from ..generation import GenerationConfig
 from ..utils import is_mindspore_available, is_vision_available, logging
 from .base import Pipeline, build_pipeline_init_args
 
@@ -27,7 +27,7 @@ logger = logging.get_logger(__name__)
 class VisualQuestionAnsweringPipeline(Pipeline):
     """
     Visual Question Answering pipeline using a `AutoModelForVisualQuestionAnswering`. This pipeline is currently only
-    available in PyTorch.
+    available in MindSpore.
 
     Unless the model you're using explicitly sets these generation parameters in its configuration files
     (`generation_config.json`), the following default values will be used:
@@ -117,7 +117,7 @@ class VisualQuestionAnsweringPipeline(Pipeline):
             image (`str`, `list[str]`, `PIL.Image`, `list[PIL.Image]` or `KeyDataset`):
                 The pipeline handles three types of images:
 
-                - A string containing a http link pointing to an image
+                - A string containing an HTTP(S) link pointing to an image
                 - A string containing a local path to an image
                 - An image loaded in PIL directly
 

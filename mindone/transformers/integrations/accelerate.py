@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from mindspore import nn
 
 
@@ -17,41 +19,23 @@ def find_tied_parameters(model: "nn.Cell", **kwargs):
 
     Returns:
         list[list[str]]: A list of lists of parameter names being all tied together.
-
-    Example:
-
-    ```py
-    >>> from collections import OrderedDict
-    >>> import mindspore.nn as nn
-    >>> from mindspore import mint
-
-    >>> model = nn.SequentialCell(OrderedDict([("linear1", mint.nn.Linear(4, 4)), ("linear2", mint.nn.Linear(4, 4))]))
-    >>> model.linear2.weight = model.linear1.weight
-    >>> find_tied_parameters(model)
-    [['linear1.weight', 'linear2.weight']]
-    ```
     """
 
-    # get ALL model parameters and their names
-    all_named_parameters = dict(model.name_cells())
+    del kwargs
 
-    # get ONLY unique named parameters,
-    # if parameter is tied and have multiple names, it will be included only once
-    no_duplicate_named_parameters = dict(model.name_cells())
+    all_named_parameters = {}
 
-    # the difference of the two sets will give us the tied parameters
-    tied_param_names = set(all_named_parameters.keys()) - set(no_duplicate_named_parameters.keys())
+    def collect_local_parameters(prefix: str, cell: "nn.Cell"):
+        for param_name, param in cell.parameters_and_names(expand=False):
+            full_name = f"{prefix}.{param_name}" if prefix else param_name
+            all_named_parameters.setdefault(full_name, param)
 
-    # 'tied_param_names' contains the names of parameters that are tied in the model, but we do not know
-    # which names refer to the same parameter. To identify this, we need to group them together.
-    tied_param_groups = {}
-    for tied_param_name in tied_param_names:
-        tied_param = all_named_parameters[tied_param_name]
-        for param_name, param in no_duplicate_named_parameters.items():
-            # compare if parameters are the same, if so, group their names together
-            if param is tied_param:
-                if param_name not in tied_param_groups:
-                    tied_param_groups[param_name] = []
-                tied_param_groups[param_name].append(tied_param_name)
+    collect_local_parameters("", model)
+    for cell_name, cell in model.name_cells().items():
+        collect_local_parameters(cell_name, cell)
 
-    return [sorted([weight] + list(set(tied))) for weight, tied in tied_param_groups.items()]
+    tied_param_groups = defaultdict(list)
+    for param_name, param in all_named_parameters.items():
+        tied_param_groups[id(param)].append(param_name)
+
+    return [sorted(names) for names in tied_param_groups.values() if len(names) > 1]

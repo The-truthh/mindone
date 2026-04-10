@@ -94,6 +94,8 @@ def ForSequenceClassificationLoss(labels, pooled_logits, config, **kwargs):
     elif config.problem_type == "multi_label_classification":
         loss_fct = BCEWithLogitsLoss()
         loss = loss_fct(pooled_logits, labels)
+    else:
+        raise RuntimeError(f"Invalid problem type: {config.problem_type}")
     return loss
 
 
@@ -130,14 +132,20 @@ LOSS_MAPPING = {
     "ForMaskedLM": ForMaskedLMLoss,
     "ForQuestionAnswering": ForQuestionAnsweringLoss,
     "ForSequenceClassification": ForSequenceClassificationLoss,
+    "ForImageClassification": ForSequenceClassificationLoss,
+    "ForVideoClassification": ForSequenceClassificationLoss,
+    "ForAudioClassification": ForSequenceClassificationLoss,
     "ForTokenClassification": ForTokenClassification,
     "ForSegmentation": ForSegmentationLoss,
     "ForObjectDetection": ForObjectDetectionLoss,
+    "ForConditionalGeneration": ForCausalLMLoss,
     "DeformableDetrForObjectDetection": DeformableDetrForObjectDetectionLoss,
     "ConditionalDetrForObjectDetection": DeformableDetrForObjectDetectionLoss,
     "DabDetrForObjectDetection": DeformableDetrForObjectDetectionLoss,
     "GroundingDinoForObjectDetection": GroundingDinoForObjectDetectionLoss,
+    "MMGroundingDinoForObjectDetection": GroundingDinoForObjectDetectionLoss,
     "ConditionalDetrForSegmentation": DeformableDetrForSegmentationLoss,
     "RTDetrForObjectDetection": RTDetrForObjectDetectionLoss,
     "RTDetrV2ForObjectDetection": RTDetrForObjectDetectionLoss,
+    "CsmForConditionalGeneration": ForCausalLMLoss,
 }

@@ -50,6 +50,10 @@ class GELUTanh(nn.Cell):
         return self.act(input)
 
 
+# Added for compatibility with downstream code that still imports PytorchGELUTanh from activations.py.
+PytorchGELUTanh = GELUTanh
+
+
 class NewGELUActivation(nn.Cell):
     """
     Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see

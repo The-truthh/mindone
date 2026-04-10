@@ -1,7 +1,6 @@
 # This code is adapted from https://github.com/huggingface/transformers
 # with modifications to run transformers on mindspore.
 
-import warnings
 from collections import UserDict
 from typing import Any, Union, overload
 
@@ -94,7 +93,7 @@ class ZeroShotImageClassificationPipeline(Pipeline):
             image (`str`, `list[str]`, `PIL.Image` or `list[PIL.Image]`):
                 The pipeline handles three types of images:
 
-                - A string containing a http link pointing to an image
+                - A string containing an HTTP(S) link pointing to an image
                 - A string containing a local path to an image
                 - An image loaded in PIL directly
 
@@ -122,6 +121,8 @@ class ZeroShotImageClassificationPipeline(Pipeline):
             image = kwargs.pop("images")
         if image is None:
             raise ValueError("Cannot call the zero-shot-image-classification pipeline without an images argument!")
+        if not candidate_labels:
+            raise ValueError("`candidate_labels` must be provided for zero-shot-image-classification.")
         return super().__call__(image, candidate_labels=candidate_labels, **kwargs)
 
     def _sanitize_parameters(self, tokenizer_kwargs=None, **kwargs):
@@ -133,10 +134,6 @@ class ZeroShotImageClassificationPipeline(Pipeline):
         if "hypothesis_template" in kwargs:
             preprocess_params["hypothesis_template"] = kwargs["hypothesis_template"]
         if tokenizer_kwargs is not None:
-            warnings.warn(
-                "The `tokenizer_kwargs` argument is deprecated and will be removed in version 5 of Transformers",
-                FutureWarning,
-            )
             preprocess_params["tokenizer_kwargs"] = tokenizer_kwargs
 
         return preprocess_params, {}, {}

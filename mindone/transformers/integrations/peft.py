@@ -332,10 +332,14 @@ class PeftAdapterMixin:
 
         from mindone.peft.tuners.tuners_utils import BaseTunerLayer
 
+        active_adapters = None
         for _, module in self.cells_and_names():
             if isinstance(module, BaseTunerLayer):
                 active_adapters = module.active_adapter
                 break
+
+        if active_adapters is None:
+            raise ValueError("Did not succeed in locating an active adapter on the current model.")
 
         # For previous PEFT versions
         if isinstance(active_adapters, str):
@@ -368,7 +372,7 @@ class PeftAdapterMixin:
         from mindone.peft import get_peft_model_state_dict
 
         if adapter_name is None:
-            adapter_name = self.active_adapter()
+            adapter_name = self.active_adapters()[0]
 
         adapter_state_dict = get_peft_model_state_dict(self, adapter_name=adapter_name)
         return adapter_state_dict

@@ -321,7 +321,7 @@ class SingleSentenceClassificationProcessor(DataProcessor):
             if not is_mindspore_available():
                 raise RuntimeError("return_tensors set to 'ms' but MindSpore can't be imported")
             import mindspore as ms
-            from mindspore.dataset import Dataset
+            from mindspore.dataset import NumpySlicesDataset
 
             all_input_ids = ms.tensor([f.input_ids for f in features], dtype=ms.int64)
             all_attention_mask = ms.tensor([f.attention_mask for f in features], dtype=ms.int64)
@@ -330,7 +330,9 @@ class SingleSentenceClassificationProcessor(DataProcessor):
             elif self.mode == "regression":
                 all_labels = ms.tensor([f.label for f in features], dtype=ms.float32)
 
-            dataset = Dataset(all_input_ids, all_attention_mask, all_labels)
+            dataset = NumpySlicesDataset(
+                {"input_ids": all_input_ids, "attention_mask": all_attention_mask, "label": all_labels}
+            )
             return dataset
         else:
-            raise ValueError("return_tensors should be one of 'tf' or 'pt'")
+            raise ValueError("return_tensors should be `'ms'` or `None`")

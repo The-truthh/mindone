@@ -100,7 +100,7 @@ class ZeroShotObjectDetectionPipeline(ChunkPipeline):
             image (`str`, `PIL.Image` or `list[dict[str, Any]]`):
                 The pipeline handles three types of images:
 
-                - A string containing an http url pointing to an image
+                - A string containing an HTTP(S) url pointing to an image
                 - A string containing a local path to an image
                 - An image loaded in PIL directly
 
@@ -113,11 +113,11 @@ class ZeroShotObjectDetectionPipeline(ChunkPipeline):
                 >>> detector(
                 ...     [
                 ...         {
-                ...             "image": "http://images.cocodataset.org/val2017/000000039769.jpg",
+                ...             "image": "https://images.cocodataset.org/val2017/000000039769.jpg",
                 ...             "candidate_labels": ["cat", "couch"],
                 ...         },
                 ...         {
-                ...             "image": "http://images.cocodataset.org/val2017/000000039769.jpg",
+                ...             "image": "https://images.cocodataset.org/val2017/000000039769.jpg",
                 ...             "candidate_labels": ["cat", "couch"],
                 ...         },
                 ...     ]
@@ -157,6 +157,8 @@ class ZeroShotObjectDetectionPipeline(ChunkPipeline):
         """
         if "text_queries" in kwargs:
             candidate_labels = kwargs.pop("text_queries")
+        if candidate_labels is None and isinstance(image, (str, Image.Image)):
+            raise ValueError("`candidate_labels` must be provided for zero-shot-object-detection.")
 
         if isinstance(image, (str, Image.Image)):
             inputs = {"image": image, "candidate_labels": candidate_labels}

@@ -4,11 +4,11 @@ import collections
 import types
 
 import numpy as np
-from transformers.generation import GenerationConfig
 
 import mindspore as ms
 from mindspore import mint
 
+from ..generation import GenerationConfig
 from ..models.auto.modeling_auto import (
     MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES,
     MODEL_FOR_TABLE_QUESTION_ANSWERING_MAPPING_NAMES,

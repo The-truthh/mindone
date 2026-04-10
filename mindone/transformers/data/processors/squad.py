@@ -37,7 +37,7 @@ MULTI_SEP_TOKENS_TOKENIZERS_SET = {"roberta", "camembert", "bart", "mpnet"}
 if is_mindspore_available():
     import mindspore as ms
     from mindspore import mint
-    from mindspore.dataset import Dataset
+    from mindspore.dataset import NumpySlicesDataset
 
 logger = logging.get_logger(__name__)
 
@@ -412,21 +412,30 @@ def squad_convert_examples_to_features(
 
         if not is_training:
             all_feature_index = mint.arange(all_input_ids.shape[0], dtype=ms.int64)
-            dataset = Dataset(
-                all_input_ids, all_attention_masks, all_token_type_ids, all_feature_index, all_cls_index, all_p_mask
+            dataset = NumpySlicesDataset(
+                {
+                    "input_ids": all_input_ids,
+                    "attention_mask": all_attention_masks,
+                    "token_type_ids": all_token_type_ids,
+                    "feature_index": all_feature_index,
+                    "cls_index": all_cls_index,
+                    "p_mask": all_p_mask,
+                }
             )
         else:
             all_start_positions = ms.tensor([f.start_position for f in features], dtype=ms.int64)
             all_end_positions = ms.tensor([f.end_position for f in features], dtype=ms.int64)
-            dataset = Dataset(
-                all_input_ids,
-                all_attention_masks,
-                all_token_type_ids,
-                all_start_positions,
-                all_end_positions,
-                all_cls_index,
-                all_p_mask,
-                all_is_impossible,
+            dataset = NumpySlicesDataset(
+                {
+                    "input_ids": all_input_ids,
+                    "attention_mask": all_attention_masks,
+                    "token_type_ids": all_token_type_ids,
+                    "start_positions": all_start_positions,
+                    "end_positions": all_end_positions,
+                    "cls_index": all_cls_index,
+                    "p_mask": all_p_mask,
+                    "is_impossible": all_is_impossible,
+                }
             )
 
         return features, dataset

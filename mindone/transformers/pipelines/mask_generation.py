@@ -51,7 +51,7 @@ class MaskGenerationPipeline(ChunkPipeline):
 
     >>> generator = pipeline(model="facebook/sam-vit-base", task="mask-generation")
     >>> outputs = generator(
-    ...     "http://images.cocodataset.org/val2017/000000039769.jpg",
+    ...     "https://images.cocodataset.org/val2017/000000039769.jpg",
     ... )
 
     >>> outputs = generator(
@@ -74,6 +74,7 @@ class MaskGenerationPipeline(ChunkPipeline):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        requires_backends(self, "vision")
 
         self.check_model_type(MODEL_FOR_MASK_GENERATION_MAPPING_NAMES)
 

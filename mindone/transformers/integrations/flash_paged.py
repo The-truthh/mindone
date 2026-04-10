@@ -10,7 +10,7 @@ def paged_attention_forward(
     v: ms.Tensor,
     attention_mask: Optional[ms.Tensor] = None,
     **kwargs,
-) -> ms.Tensor:
+) -> tuple[ms.Tensor, None]:
     r"""Perform the forward pass of attention with paged key-value cache.
 
     This function handles the cache updates and performs the attention computation
@@ -25,7 +25,7 @@ def paged_attention_forward(
     """
     if not hasattr(module, "infer_attention"):
         raise NotImplementedError(
-            "This model has not supported PagedAttenion yet. Please refer to qwen3 setting and supplement infer_attention as well."
+            "This model has not supported PagedAttention yet. Please refer to qwen3 setting and supplement infer_attention as well."
         )
 
     attn_output = module.infer_attention(
