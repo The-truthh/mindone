@@ -21,8 +21,6 @@
 
 from typing import Callable, Optional, Union
 
-from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
-
 import mindspore as ms
 from mindspore import mint, nn
 
@@ -43,6 +41,7 @@ from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from ...processing_utils import Unpack
 from ...utils import TransformersKwargs, can_return_tuple
 from ...utils.generic import check_model_inputs
+from .configuration_qwen3 import Qwen3Config
 
 
 class Qwen3RMSNorm(nn.Cell):
@@ -239,6 +238,34 @@ class Qwen3DecoderLayer(GradientCheckpointingLayer):
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attention_type = config.layer_types[layer_idx]
 
+    def attn_output(
+        self,
+        hidden_states: ms.Tensor,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: Optional[bool] = False,
+        cache_position: Optional[ms.Tensor] = None,
+        position_embeddings: Optional[tuple[ms.Tensor, ms.Tensor]] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> ms.Tensor:
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states, _ = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+        return hidden_states
+
+    def mlp_output(self, hidden_states: ms.Tensor) -> ms.Tensor:
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        return self.mlp(hidden_states)
+
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -251,9 +278,7 @@ class Qwen3DecoderLayer(GradientCheckpointingLayer):
         **kwargs: Unpack[TransformersKwargs],
     ) -> ms.Tensor:
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        # Self Attention
-        hidden_states, _ = self.self_attn(
+        hidden_states = self.attn_output(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -267,10 +292,80 @@ class Qwen3DecoderLayer(GradientCheckpointingLayer):
 
         # Fully Connected
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp_output(hidden_states)
         hidden_states = residual + hidden_states
         return hidden_states
+
+
+class Qwen3AttentionResidualMixer(nn.Cell):
+    def __init__(self, num_queries: int, hidden_size: int, eps: float):
+        super().__init__()
+        self.key_norms = nn.CellList([Qwen3RMSNorm(hidden_size, eps=eps) for _ in range(num_queries)])
+        self.queries = ms.Parameter(mint.zeros((num_queries, hidden_size), dtype=ms.float32), name="queries")
+
+    def mix(self, query_index: int, source_values: list[ms.Tensor]) -> ms.Tensor:
+        sources = mint.stack(source_values, dim=0)
+        keys = self.key_norms[query_index](sources).to(ms.float32)
+        query = self.queries[query_index].to(ms.float32)
+        logits = mint.einsum("d,lbsd->lbs", query, keys)
+        weights = mint.nn.functional.softmax(logits, dim=0, dtype=ms.float32).to(sources.dtype)
+        return mint.einsum("lbs,lbsd->bsd", weights, sources)
+
+
+class Qwen3FullAttentionResidual(nn.Cell):
+    def __init__(self, num_logical_layers: int, hidden_size: int, eps: float):
+        super().__init__()
+        self.num_logical_layers = num_logical_layers
+        self.mixer = Qwen3AttentionResidualMixer(num_logical_layers + 1, hidden_size, eps)
+
+    def layer_input(self, embedding: ms.Tensor, prior_outputs: list[ms.Tensor], logical_layer_index: int) -> ms.Tensor:
+        return self.mixer.mix(logical_layer_index, [embedding, *prior_outputs])
+
+    def final_output(self, embedding: ms.Tensor, all_outputs: list[ms.Tensor]) -> ms.Tensor:
+        return self.mixer.mix(self.num_logical_layers, [embedding, *all_outputs])
+
+
+class Qwen3BlockAttentionResidualState:
+    def __init__(self, embedding: ms.Tensor, block_size: int):
+        self.completed_blocks = [embedding]
+        self.partial_block = None
+        self.completed_layers = 0
+        self.block_size = block_size
+
+    def current_sources(self) -> list[ms.Tensor]:
+        if self.partial_block is None:
+            return self.completed_blocks
+        return [*self.completed_blocks, self.partial_block]
+
+    def append_layer_output(self, layer_output: ms.Tensor):
+        if self.partial_block is None:
+            self.partial_block = layer_output
+        else:
+            self.partial_block = self.partial_block + layer_output
+        self.completed_layers += 1
+        if self.completed_layers % self.block_size == 0:
+            self.completed_blocks.append(self.partial_block)
+            self.partial_block = None
+
+
+class Qwen3BlockAttentionResidual(nn.Cell):
+    def __init__(self, num_logical_layers: int, hidden_size: int, block_size: int, eps: float):
+        super().__init__()
+        self.num_logical_layers = num_logical_layers
+        self.block_size = block_size
+        self.mixer = Qwen3AttentionResidualMixer(num_logical_layers + 1, hidden_size, eps)
+
+    def init_state(self, embedding: ms.Tensor) -> Qwen3BlockAttentionResidualState:
+        return Qwen3BlockAttentionResidualState(embedding, self.block_size)
+
+    def layer_input(self, state: Qwen3BlockAttentionResidualState, logical_layer_index: int) -> ms.Tensor:
+        return self.mixer.mix(logical_layer_index, state.current_sources())
+
+    def append_layer_output(self, state: Qwen3BlockAttentionResidualState, layer_output: ms.Tensor):
+        state.append_layer_output(layer_output)
+
+    def final_output(self, state: Qwen3BlockAttentionResidualState) -> ms.Tensor:
+        return self.mixer.mix(self.num_logical_layers, state.current_sources())
 
 
 class Qwen3PreTrainedModel(PreTrainedModel):
@@ -330,6 +425,9 @@ class Qwen3Model(Qwen3PreTrainedModel):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
+        self.attn_residual_variant = config.attn_residual_variant
+        self.attn_residual_block_size = config.attn_residual_block_size
+        self.attn_residual_eps = config.attn_residual_eps
 
         self.embed_tokens = mint.nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.CellList(
@@ -337,6 +435,20 @@ class Qwen3Model(Qwen3PreTrainedModel):
         )
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config=config)
+        num_logical_layers = 2 * config.num_hidden_layers
+        if self.attn_residual_variant == "full":
+            self.attn_residual_mixer = Qwen3FullAttentionResidual(
+                num_logical_layers, config.hidden_size, self.attn_residual_eps
+            )
+        elif self.attn_residual_variant == "block":
+            self.attn_residual_mixer = Qwen3BlockAttentionResidual(
+                num_logical_layers,
+                config.hidden_size,
+                self.attn_residual_block_size,
+                self.attn_residual_eps,
+            )
+        else:
+            self.attn_residual_mixer = None
         self.gradient_checkpointing = False
         self.has_sliding_layers = "sliding_attention" in self.config.layer_types
 
@@ -395,15 +507,38 @@ class Qwen3Model(Qwen3PreTrainedModel):
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
-            hidden_states = decoder_layer(
+        if self.attn_residual_variant == "none":
+            for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+                hidden_states = decoder_layer(
+                    hidden_states,
+                    attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                    **kwargs,
+                )
+        elif self.attn_residual_variant == "full":
+            hidden_states = self._forward_full_attnres(
                 hidden_states,
-                attention_mask=causal_mask_mapping[decoder_layer.attention_type],
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                cache_position=cache_position,
-                position_embeddings=position_embeddings,
+                causal_mask_mapping,
+                position_ids,
+                past_key_values,
+                use_cache,
+                cache_position,
+                position_embeddings,
+                **kwargs,
+            )
+        else:
+            hidden_states = self._forward_block_attnres(
+                hidden_states,
+                causal_mask_mapping,
+                position_ids,
+                past_key_values,
+                use_cache,
+                cache_position,
+                position_embeddings,
                 **kwargs,
             )
 
@@ -412,6 +547,68 @@ class Qwen3Model(Qwen3PreTrainedModel):
             last_hidden_state=hidden_states,
             past_key_values=past_key_values if use_cache else None,
         )
+
+    def _forward_full_attnres(
+        self,
+        embedding: ms.Tensor,
+        causal_mask_mapping: dict[str, ms.Tensor],
+        position_ids: ms.Tensor,
+        past_key_values: Optional[Cache],
+        use_cache: Optional[bool],
+        cache_position: ms.Tensor,
+        position_embeddings: tuple[ms.Tensor, ms.Tensor],
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> ms.Tensor:
+        prior_outputs = []
+        for layer_idx, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
+            attn_input = self.attn_residual_mixer.layer_input(embedding, prior_outputs, 2 * layer_idx)
+            attn_output = decoder_layer.attn_output(
+                attn_input,
+                attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+            prior_outputs.append(attn_output)
+
+            mlp_input = self.attn_residual_mixer.layer_input(embedding, prior_outputs, 2 * layer_idx + 1)
+            mlp_output = decoder_layer.mlp_output(mlp_input)
+            prior_outputs.append(mlp_output)
+        return self.attn_residual_mixer.final_output(embedding, prior_outputs)
+
+    def _forward_block_attnres(
+        self,
+        embedding: ms.Tensor,
+        causal_mask_mapping: dict[str, ms.Tensor],
+        position_ids: ms.Tensor,
+        past_key_values: Optional[Cache],
+        use_cache: Optional[bool],
+        cache_position: ms.Tensor,
+        position_embeddings: tuple[ms.Tensor, ms.Tensor],
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> ms.Tensor:
+        state = self.attn_residual_mixer.init_state(embedding)
+        for layer_idx, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
+            attn_input = self.attn_residual_mixer.layer_input(state, 2 * layer_idx)
+            attn_output = decoder_layer.attn_output(
+                attn_input,
+                attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+            self.attn_residual_mixer.append_layer_output(state, attn_output)
+
+            mlp_input = self.attn_residual_mixer.layer_input(state, 2 * layer_idx + 1)
+            mlp_output = decoder_layer.mlp_output(mlp_input)
+            self.attn_residual_mixer.append_layer_output(state, mlp_output)
+        return self.attn_residual_mixer.final_output(state)
 
 
 class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):

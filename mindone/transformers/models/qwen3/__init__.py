@@ -14,4 +14,5 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from .configuration_qwen3 import Qwen3Config
 from .modeling_qwen3 import *

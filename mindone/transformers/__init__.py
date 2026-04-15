@@ -1702,12 +1702,13 @@ from .video_processing_utils import BaseVideoProcessor
 
 if version.parse(transformers.__version__) >= version.parse("4.51.0"):
     from .models.qwen3 import (
+        Qwen3Config,
         Qwen3ForCausalLM,
+        Qwen3ForQuestionAnswering,
         Qwen3ForSequenceClassification,
         Qwen3ForTokenClassification,
         Qwen3Model,
         Qwen3PreTrainedModel,
-        Qwen3ForQuestionAnswering,
     )
     from .models.qwen3_moe import (
         Qwen3MoeForCausalLM,

@@ -23,7 +23,7 @@ DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-2}
 MODES = [1]
 
 if transformers.__version__ >= "4.51.0":
-    from transformers import Qwen3Config
+    from mindone.transformers.models.qwen3 import Qwen3Config
 
     class Qwen3ModelTester:
         config_class = Qwen3Config
@@ -183,3 +183,69 @@ if transformers.__version__ >= "4.51.0":
             f"ms_dtype: {ms_dtype}, pt_type:{pt_dtype}, "
             f"Outputs({np.array(diffs).tolist()}) has diff bigger than {THRESHOLD}"
         )
+
+    def _get_attn_residual_config(variant="block", block_size=2):
+        config = model_tester.get_config()
+        config._attn_implementation = "eager"
+        config.attn_residual_variant = variant
+        config.attn_residual_block_size = block_size
+        config.attn_residual_eps = config.rms_norm_eps
+        return config
+
+    def test_qwen3_attn_residual_block_forward_shape():
+        from mindone.transformers import Qwen3Model
+
+        ms.set_context(mode=1)
+        config = _get_attn_residual_config("block", block_size=2)
+        model = Qwen3Model(config)
+        input_ids = ms.tensor(ids_numpy([2, 5], config.vocab_size), dtype=ms.int32)
+
+        outputs = model(input_ids=input_ids)
+
+        assert outputs.last_hidden_state.shape == (2, 5, config.hidden_size)
+
+    def test_qwen3_attn_residual_parameters_are_registered():
+        from mindone.transformers import Qwen3Model
+
+        config = _get_attn_residual_config("block", block_size=2)
+        model = Qwen3Model(config)
+        param_names = [name for name, _ in model.parameters_and_names()]
+
+        assert any("attn_residual_mixer" in name and "queries" in name for name in param_names)
+
+    def test_qwen3_attn_residual_block_one_matches_full():
+        from mindone.transformers import Qwen3Model
+
+        ms.set_context(mode=1)
+        full_config = _get_attn_residual_config("full", block_size=1)
+        block_config = _get_attn_residual_config("block", block_size=1)
+        full_model = Qwen3Model(full_config)
+        block_model = Qwen3Model(block_config)
+        ms.load_param_into_net(block_model, full_model.parameters_dict(), strict_load=False)
+        input_ids = ms.tensor(ids_numpy([2, 5], full_config.vocab_size), dtype=ms.int32)
+
+        full_outputs = full_model(input_ids=input_ids).last_hidden_state.asnumpy()
+        block_outputs = block_model(input_ids=input_ids).last_hidden_state.asnumpy()
+
+        np.testing.assert_allclose(block_outputs, full_outputs, atol=1e-5, rtol=1e-5)
+
+    def test_qwen3_attn_residual_rejects_invalid_variant():
+        from mindone.transformers import Qwen3Model
+
+        config = _get_attn_residual_config("bad", block_size=1)
+
+        with pytest.raises(ValueError, match="attn_residual_variant"):
+            Qwen3Model(config)
+
+    def test_qwen3_attn_residual_config_roundtrip():
+        config = Qwen3Config(
+            attn_residual_variant="block",
+            attn_residual_block_size=4,
+            attn_residual_eps=1e-5,
+        )
+
+        restored = Qwen3Config.from_dict(config.to_dict())
+
+        assert restored.attn_residual_variant == "block"
+        assert restored.attn_residual_block_size == 4
+        assert restored.attn_residual_eps == 1e-5
