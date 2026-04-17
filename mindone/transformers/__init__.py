@@ -1137,6 +1137,18 @@ from .models.oneformer import (
     OneFormerPreTrainedModel,
     OneFormerProcessor,
 )
+from .models.openpangu_vl import (
+    OpenPanguTokenizer,
+    OpenPanguVL,
+    OpenPanguVLConfig,
+    OpenPanguVLForConditionalGeneration,
+    OpenPanguVLImageProcessorFast,
+    OpenPanguVLModel,
+    OpenPanguVLPreTrainedModel,
+    OpenPanguVLProcessor,
+    OpenPanguVLTextConfig,
+    OpenPanguVLVisionConfig,
+)
 from .models.opt import (
     OPTForCausalLM,
     OPTForQuestionAnswering,

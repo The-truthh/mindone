@@ -73,6 +73,7 @@ PROCESSOR_MAPPING_NAMES = OrderedDict(
         ("llava_onevision", "LlavaOnevisionProcessor"),
         ("metaclip_2", "CLIPProcessor"),
         ("oneformer", "OneFormerProcessor"),
+        ("openpangu_vl", "OpenPanguVLProcessor"),
         ("owlv2", "Owlv2Processor"),
         ("owlvit", "OwlViTProcessor"),
         ("phi4_multimodal", "Phi4MultimodalProcessor"),

@@ -82,6 +82,7 @@ else:
             ("metaclip_2", ("CLIPImageProcessor", "CLIPImageProcessorFast")),
             ("mllama", ("MllamaImageProcessor",)),
             ("oneformer", ("OneFormerImageProcessor",)),
+            ("openpangu_vl", (None, "OpenPanguVLImageProcessorFast")),
             ("owlv2", ("Owlv2ImageProcessor",)),
             ("owlvit", ("OwlViTImageProcessor",)),
             ("phi4_multimodal", (None, "Phi4MultimodalImageProcessorFast")),

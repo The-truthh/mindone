@@ -201,6 +201,7 @@ from . import (
     olmo3,
     olmoe,
     oneformer,
+    openpangu_vl,
     opt,
     ovis2,
     owlv2,
