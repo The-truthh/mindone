@@ -27,7 +27,7 @@ from pathlib import Path
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module, resolve_trust_remote_code
-from transformers.models.auto.configuration_auto import (
+from .configuration_auto import (
     AutoConfig,
     model_type_to_module_name,
     replace_list_option_in_docstrings,
