@@ -1,5 +1,5 @@
 import mindspore as ms
-from mindone.transformers import AutoProcessor, AutoModelForCausalLM
+from mindone.transformers import OpenPanguVL, OpenPanguVLProcessor
 from mindone.transformers.models.qwen2_vl.qwen_vl_utils import process_vision_info
 
 model_path = "JohnsonWythe/openPangu-VL-7B"
@@ -11,7 +11,7 @@ key_mapping = {
     r"^model(?!\.(language_model|visual))": "model.language_model",
 }
 
-model = AutoModelForCausalLM.from_pretrained(
+model = OpenPanguVL.from_pretrained(
     model_path,
     trust_remote_code=False,
     dtype=ms.bfloat16,
@@ -33,7 +33,7 @@ conversation = [
     },
 ]
 
-processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=False)
+processor = OpenPanguVLProcessor.from_pretrained(model_path, trust_remote_code=False)
 text = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
 
 image_inputs, video_inputs = process_vision_info(conversation)
