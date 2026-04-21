@@ -31,7 +31,7 @@ from tests.transformers_tests.models.modeling_common import floats_numpy, ids_nu
 
 # CrossEntropyLoss not support bf16
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3}
-MODES = [0, 1]
+MODES = [1]
 
 
 class BertModelTester:

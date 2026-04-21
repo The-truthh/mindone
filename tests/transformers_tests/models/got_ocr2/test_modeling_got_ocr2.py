@@ -95,6 +95,7 @@ class GotOcr2ModelTester:
             attn_implementation=self.attn_implementation,
             torch_dtype=self.torch_dtype,
         )
+        text_config._attn_implementation = self.attn_implementation
 
         vision_config = GotOcr2VisionConfig(
             hidden_size=self.vision_hidden_size,
@@ -122,6 +123,7 @@ class GotOcr2ModelTester:
             image_seq_length=self.tokens_per_image,
             torch_dtype=self.torch_dtype,
         )
+        config.text_config._attn_implementation = self.attn_implementation
         return config
 
     def prepare_config_and_inputs(self):

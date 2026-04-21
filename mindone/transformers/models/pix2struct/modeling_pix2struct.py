@@ -444,7 +444,7 @@ class Pix2StructPreTrainedModel(PreTrainedModel):
         elif isinstance(module, (mint.nn.Linear, mint.nn.Conv2d)):
             # Upcast the input in `fp32` and cast it back to desired `dtype` to avoid
             # `trunc_normal_cpu` not implemented in `half` issues
-            module.weight.data.set_data(
+            module.weight.set_data(
                 initializer(
                     TruncatedNormal(mean=0.0, sigma=self.config.initializer_range),
                     shape=module.weight.data.shape,

@@ -27,6 +27,7 @@ from transformers import Ernie4_5_MoeConfig
 
 import mindspore
 from mindspore import Parameter, Tensor, mint, nn
+from mindspore.common.initializer import Normal, initializer
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache
@@ -291,6 +292,59 @@ class Ernie4_5_MoeStatics(nn.Cell):
         return hidden_states + self.e_score_correction_bias.squeeze()
 
 
+class Ernie4_5_MoeExperts(nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.num_experts = config.moe_num_experts
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.moe_intermediate_size
+        self.gate_up_proj = Parameter(mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim)))
+        self.down_proj = Parameter(mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim)))
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: Tensor,
+        top_k_index: Tensor,
+        top_k_weights: Tensor,
+    ) -> Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.astype(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
+class Ernie4_5_MoeTopKRouter(nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.weight = Parameter(mint.zeros((config.moe_num_experts, config.hidden_size), dtype=mindspore.float32))
+        self.moe_statics = Ernie4_5_MoeStatics(config)
+        self.top_k = config.moe_k
+        self.norm_min = config.moe_norm_min
+
+    def construct(self, hidden_states: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        router_logits = mint.nn.functional.linear(hidden_states.float(), self.weight.float())
+        routing_weights = mint.nn.functional.softmax(router_logits, dim=1, dtype=mindspore.float32)
+        _, selected_experts = mint.topk(self.moe_statics(routing_weights), self.top_k, dim=-1)
+        routing_weights = mint.gather(routing_weights, dim=-1, index=selected_experts)
+        routing_weights = routing_weights / mint.clamp(routing_weights.sum(dim=-1, keepdim=True), min=self.norm_min)
+        routing_weights = routing_weights.to(hidden_states.dtype)
+        return router_logits, selected_experts, routing_weights
+
+
 class Ernie4_5_MoeSparseMoeBlock(nn.Cell):
     """
     This implementation is
@@ -308,18 +362,12 @@ class Ernie4_5_MoeSparseMoeBlock(nn.Cell):
 
     def __init__(self, config):
         super().__init__()
+        self.hidden_dim = config.hidden_size
         self.num_experts = config.moe_num_experts
         self.top_k = config.moe_k
 
-        # correction bias (yes it seems to be a typo with statics <> statistics)
-        self.moe_statics = Ernie4_5_MoeStatics(config)
-
-        # gating
-        self.gate = mint.nn.Linear(config.hidden_size, config.moe_num_experts, bias=False, dtype=mindspore.float32)
-        self.experts = nn.CellList(
-            [Ernie4_5_MoeMLP(config, config.moe_intermediate_size) for _ in range(config.moe_num_experts)]
-        )
-        self.norm_min = config.moe_norm_min
+        self.gate = Ernie4_5_MoeTopKRouter(config)
+        self.experts = Ernie4_5_MoeExperts(config)
 
         # (optional) shared experts for all forwards
         self.shared_experts = None
@@ -330,52 +378,22 @@ class Ernie4_5_MoeSparseMoeBlock(nn.Cell):
         self,
         hidden_states: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
+        batch_size, sequence_length, _ = hidden_states.shape
+        hidden_states = hidden_states.view(-1, self.hidden_dim)
 
         # (Optional) shared experts
         if self.shared_experts is not None:
             shared_output = self.shared_experts(hidden_states)
 
-        # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states.float())
-
-        routing_weights = mint.nn.functional.softmax(router_logits, dim=1, dtype=mindspore.float32)
-        _, selected_experts = mint.topk(self.moe_statics(routing_weights), self.top_k, dim=-1)
-        routing_weights = mint.gather(routing_weights, dim=-1, index=selected_experts)
-        routing_weights = routing_weights / mint.clamp(routing_weights.sum(dim=-1, keepdim=True), min=self.norm_min)
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = mint.zeros((batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype)
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        expert_mask = mint.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        # Loop over all available experts in the model and perform the computation on each expert
-        expert_hitted = mint.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-        for expert_idx in expert_hitted:
-            # ms does not support scalar to be celllist index
-            expert_idx = expert_idx.item()
-            expert_layer = self.experts[expert_idx]
-            idx, top_x = mint.where(expert_mask[expert_idx].squeeze(0))
-
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+        _, top_k_index, top_k_weights = self.gate(hidden_states)
+        final_hidden_states = self.experts(hidden_states, top_k_index, top_k_weights)
 
         # Add (optional) shared experts to the result
         if self.shared_experts is not None:
             final_hidden_states = final_hidden_states + shared_output
 
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        return final_hidden_states, router_logits
+        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, self.hidden_dim)
+        return final_hidden_states.to(hidden_states.dtype)
 
 
 class Ernie4_5_MoeDecoderLayer(GradientCheckpointingLayer):
@@ -471,18 +489,33 @@ class Ernie4_5_MoePreTrainedModel(PreTrainedModel):
     _can_compile_fullgraph = False
     _supports_attention_backend = True
     _can_record_outputs = {
-        "router_logits": OutputRecorder(Ernie4_5_MoeSparseMoeBlock, index=1),
+        "router_logits": OutputRecorder(Ernie4_5_MoeTopKRouter, index=0),
         "hidden_states": Ernie4_5_MoeDecoderLayer,
         "attentions": Ernie4_5_MoeAttention,
     }
-    _keep_in_fp32_modules_strict = ["gate", "moe_statics"]
+    _keep_in_fp32_modules_strict = ["gate.weight", "moe_statics"]
     # Not supporting multi-token prediction (MTP) atm
     _keys_to_ignore_on_load_unexpected = ["mtp"]
 
     def _init_weights(self, module):
         super()._init_weights(module)
         if isinstance(module, Ernie4_5_MoeStatics):
-            module.e_score_correction_bias.data.zero_()
+            module.e_score_correction_bias.zero_()
+        elif isinstance(module, Ernie4_5_MoeExperts):
+            module.gate_up_proj.set_data(
+                initializer(
+                    Normal(sigma=self.config.initializer_range, mean=0.0),
+                    module.gate_up_proj.shape,
+                    module.gate_up_proj.dtype,
+                )
+            )
+            module.down_proj.set_data(
+                initializer(
+                    Normal(sigma=self.config.initializer_range, mean=0.0),
+                    module.down_proj.shape,
+                    module.down_proj.dtype,
+                )
+            )
 
 
 class Ernie4_5_MoeModel(Ernie4_5_MoePreTrainedModel):

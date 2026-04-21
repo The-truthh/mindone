@@ -50,13 +50,14 @@ class ZambaModelTester:
         use_labels=True,
         vocab_size=99,
         hidden_size=32,
-        num_hidden_layers=4,
+        num_hidden_layers=6,
         num_attention_heads=4,
         num_key_value_heads=2,
         intermediate_size=64,
         hidden_act="silu",
         attention_dropout=0.0,
-        attn_layer_indices=None,
+        attn_layer_period=2,
+        attn_layer_offset=1,
         attn_rotary_emb=8,
         max_position_embeddings=512,
         type_vocab_size=16,
@@ -85,7 +86,8 @@ class ZambaModelTester:
         self.intermediate_size = intermediate_size
         self.hidden_act = hidden_act
         self.attention_dropout = attention_dropout
-        self.attn_layer_indices = attn_layer_indices
+        self.attn_layer_period = attn_layer_period
+        self.attn_layer_offset = attn_layer_offset
         self.attn_rotary_emb = attn_rotary_emb
         self.max_position_embeddings = max_position_embeddings
         self.type_vocab_size = type_vocab_size
@@ -128,16 +130,6 @@ class ZambaModelTester:
         return config, inputs_dict
 
     def get_config(self):
-        # Fix for SDPA tests, force at least 4 layers
-        if self.num_hidden_layers < 4:
-            self.num_hidden_layers = 4
-        if self.attn_layer_indices is None:
-            d = [x for x in range(2, self.num_hidden_layers) if self.num_hidden_layers % x == 0]
-            if len(d) == 0:
-                raise ValueError("num_hidden_layers is prime, cannot automatically set attn_layer_indices.")
-            d = d[-1]  # get the largest divisor
-            self.attn_layer_indices = [x + 1 for x in range(0, self.num_hidden_layers, d)]
-
         return ZambaConfig(
             vocab_size=self.vocab_size,
             hidden_size=self.hidden_size,
@@ -147,7 +139,8 @@ class ZambaModelTester:
             intermediate_size=self.intermediate_size,
             hidden_act=self.hidden_act,
             attention_dropout=self.attention_dropout,
-            attn_layer_indices=self.attn_layer_indices,
+            attn_layer_period=self.attn_layer_period,
+            attn_layer_offset=self.attn_layer_offset,
             attn_rotary_emb=self.attn_rotary_emb,
             max_position_embeddings=self.max_position_embeddings,
             initializer_range=self.initializer_range,

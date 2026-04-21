@@ -218,6 +218,19 @@ Reformer_CASES = [
 ]
 
 
+def fix_pt_reformer_mask_buffers_after_fp16_cpu_fallback(pt_model, dtype, pt_dtype):
+    if dtype != "fp16" or pt_dtype != "fp32":
+        return
+
+    # The generic test helper casts PyTorch to fp16 before falling back to fp32 for CPU LayerNorm.
+    # Restore Reformer fp32 mask buffers because -1e9 becomes -inf during that temporary fp16 cast.
+    for module in pt_model.modules():
+        if hasattr(module, "self_mask_value_float32"):
+            module.self_mask_value_float32 = torch.tensor(-1e5, dtype=torch.float32)
+        if hasattr(module, "mask_value_float32"):
+            module.mask_value_float32 = torch.tensor(-1e9, dtype=torch.float32)
+
+
 # FIXME the test requires MindSpore to support the ParameterList feature.
 # https://gitee.com/mindspore/mindspore/pulls/88092
 @pytest.mark.skipif(ms.__version__ <= "2.7.0", reason="mindspore has not yet supported nn.ParameterList")
@@ -256,6 +269,7 @@ def test_named_modules(
         pt_dtype,
         ms_dtype,
     ) = get_modules(pt_module, ms_module, dtype, *init_args, **init_kwargs)
+    fix_pt_reformer_mask_buffers_after_fp16_cpu_fallback(pt_model, dtype, pt_dtype)
     pt_inputs_args, pt_inputs_kwargs, ms_inputs_args, ms_inputs_kwargs = generalized_parse_args(
         pt_dtype, ms_dtype, *inputs_args, **inputs_kwargs
     )

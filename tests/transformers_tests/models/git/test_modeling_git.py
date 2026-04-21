@@ -22,6 +22,8 @@ import numpy as np
 import pytest
 import torch
 from transformers import GitConfig, GitVisionConfig
+from transformers.masking_utils import create_masks_for_generate
+from transformers.models.git import modeling_git as transformers_git_modeling
 
 import mindspore as ms
 
@@ -36,6 +38,30 @@ from tests.transformers_tests.models.modeling_common import floats_numpy, ids_nu
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 6e-3}
 MODES = [1]
+
+
+def _create_text_only_causal_mask_mapping(
+    config,
+    input_embeds,
+    attention_mask,
+    cache_position,
+    past_key_values,
+    position_ids,
+    token_type_ids=None,
+    pixel_values=None,
+    **kwargs,
+):
+    return create_masks_for_generate(
+        config=config.get_text_config(),
+        input_embeds=input_embeds,
+        attention_mask=attention_mask,
+        cache_position=cache_position,
+        past_key_values=past_key_values,
+        position_ids=position_ids,
+    )
+
+
+transformers_git_modeling.create_causal_mask_mapping = _create_text_only_causal_mask_mapping
 
 
 class GitVisionModelTester:
@@ -210,7 +236,6 @@ BERT_CASES = [
         (input_ids,),
         {
             "attention_mask": input_mask,
-            "pixel_values": pixel_values,
         },
         {
             "last_hidden_state": 0,

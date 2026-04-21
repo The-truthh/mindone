@@ -33,7 +33,7 @@ from ...mindspore_adapter import dtype_to_min
 from ...modeling_attn_mask_utils import AttentionMaskConverter
 from ...modeling_flash_attention_utils import is_flash_attn_available
 from ...modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast, SequenceClassifierOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from ...modeling_utils import MSPreTrainedModel
 from ...utils import logging
 
@@ -134,27 +134,30 @@ class PhimoeRotaryEmbedding(mindspore.nn.Cell):
         super().__init__()
 
         self.config = config
-        if config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-            self.short_mscale = config.rope_scaling.get("short_mscale")
-            self.long_mscale = config.rope_scaling.get("long_mscale")
-        else:
-            self.rope_type = "default"
+        self.rope_type = config.rope_parameters["rope_type"]
+        self.short_mscale = config.rope_parameters.get("short_mscale")
+        self.long_mscale = config.rope_parameters.get("long_mscale")
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
+        self.inv_freq = mindspore.Parameter(inv_freq, requires_grad=False, name="inv_freq")
+        self.original_inv_freq = self.inv_freq
 
-    def construct(self, x, seq_len=None):
+    @dynamic_rope_update
+    def construct(self, x, position_ids):
         mscale = None
-        if self.config.rope_scaling and seq_len:
+        seq_len = mindspore.mint.max(position_ids) + 1
+        if self.config.rope_parameters["rope_type"] != "default" and seq_len:
             mscale = (
                 self.long_mscale
-                if seq_len > self.config.rope_scaling["original_max_position_embeddings"]
+                if seq_len > self.config.rope_parameters["original_max_position_embeddings"]
                 else self.short_mscale
             )
         inv_freq, attention_scaling = self.rope_init_fn(self.config, seq_len)
         mscale = attention_scaling if mscale is None else mscale
-        t = mindspore.mint.arange(int(seq_len), dtype=mindspore.float32)
-        freqs = mindspore.mint.outer(t, inv_freq)
+        inv_freq_expanded = inv_freq[None, :, None].float().broadcast_to((position_ids.shape[0], -1, 1))
+        position_ids_expanded = position_ids[:, None, :].float()
 
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).swapaxes(1, 2)
         emb = mindspore.mint.cat((freqs, freqs), dim=-1)
         return (emb.cos() * mscale).to(x.dtype), (emb.sin() * mscale).to(x.dtype)
 
@@ -188,8 +191,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     Returns:
         `tuple(ms.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -231,7 +234,6 @@ class PhimoeAttention(mindspore.nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
         self.is_causal = True
         self.attention_dropout = config.attention_dropout
 
@@ -575,6 +577,69 @@ def sparsemixer(scores, jitter_eps, training, top_k=2):
     )
 
 
+class PhimoeExperts(mindspore.nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config: PhimoeConfig):
+        super().__init__()
+        self.num_experts = config.num_local_experts
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.intermediate_size
+        self.gate_up_proj = mindspore.Parameter(
+            mindspore.mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim))
+        )
+        self.down_proj = mindspore.Parameter(
+            mindspore.mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim))
+        )
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: mindspore.Tensor,
+        top_k_index: mindspore.Tensor,
+        top_k_weights: mindspore.Tensor,
+    ) -> mindspore.Tensor:
+        final_hidden_states = mindspore.mint.zeros_like(hidden_states)
+        expert_mask = mindspore.mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mindspore.mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mindspore.mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(
+                2, dim=-1
+            )
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mindspore.mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
+class PhimoeTopKRouter(mindspore.nn.Cell):
+    def __init__(self, config: PhimoeConfig):
+        super().__init__()
+        self.weight = mindspore.Parameter(mindspore.mint.empty((config.num_local_experts, config.hidden_size)))
+        self.router_jitter_noise = config.router_jitter_noise
+        self.input_jitter_noise = config.input_jitter_noise
+
+    def construct(self, hidden_states: mindspore.Tensor) -> Tuple[mindspore.Tensor, mindspore.Tensor]:
+        if self.training and self.input_jitter_noise > 0:
+            hidden_states *= mindspore.mint.empty_like(hidden_states).uniform_(
+                1.0 - self.input_jitter_noise, 1.0 + self.input_jitter_noise
+            )
+        router_logits = mindspore.mint.nn.functional.linear(hidden_states, self.weight)
+        routing_weights, selected_experts = sparsemixer(
+            router_logits,
+            jitter_eps=self.router_jitter_noise,
+            training=self.training,
+        )
+        routing_weights = mindspore.mint.zeros_like(router_logits).scatter(1, selected_experts, routing_weights)
+        return routing_weights, selected_experts
+
+
 class PhimoeSparseMoeBlock(mindspore.nn.Cell):
     """
     This implementation is
@@ -593,61 +658,42 @@ class PhimoeSparseMoeBlock(mindspore.nn.Cell):
         self.ffn_dim = config.intermediate_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
-        # gating
-        self.gate = mindspore.mint.nn.Linear(self.hidden_dim, self.num_experts, bias=False)
-
-        self.experts = mindspore.nn.CellList([PhimoeBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
-
-        # Jitter parameters
-        self.router_jitter_noise = config.router_jitter_noise
+        self.router = PhimoeTopKRouter(config)
+        self.experts = PhimoeExperts(config)
         self.input_jitter_noise = config.input_jitter_noise
 
     def construct(self, hidden_states: mindspore.Tensor) -> mindspore.Tensor:
-        """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         if self.training and self.input_jitter_noise > 0:
             hidden_states *= mindspore.mint.empty_like(hidden_states).uniform_(
                 1.0 - self.input_jitter_noise, 1.0 + self.input_jitter_noise
             )
         hidden_states = hidden_states.view(-1, hidden_dim)
-        router_logits = self.gate(hidden_states)
-
-        routing_weights, selected_experts = sparsemixer(
-            router_logits,
-            jitter_eps=self.router_jitter_noise,
-            training=self.training,
+        routing_weights, selected_experts = self.router(hidden_states)
+        final_hidden_states = self.experts(hidden_states, selected_experts, routing_weights).reshape(
+            batch_size, sequence_length, hidden_dim
         )
+        return final_hidden_states, routing_weights
 
-        final_hidden_states = mindspore.mint.zeros(
-            (batch_size * sequence_length, hidden_dim),
-            dtype=hidden_states.dtype,
-        )
 
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        expert_mask = mindspore.mint.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(
-            2, 1, 0
-        )
+class PhimoeRMSNorm(mindspore.nn.Cell):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        PhimoeRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = mindspore.Parameter(mindspore.mint.ones(hidden_size))
+        self.variance_epsilon = eps
 
-        # Loop over all available experts in the model and perform the computation on each expert
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.experts[expert_idx]
-            idx, top_x = mindspore.mint.where(expert_mask[expert_idx])
+    def construct(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(mindspore.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * mindspore.mint.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
 
-            if top_x.shape[0] == 0:
-                continue
-
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support torch tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        return final_hidden_states, router_logits
+    def extra_repr(self):
+        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
 class PhimoeDecoderLayer(mindspore.nn.Cell):
@@ -657,13 +703,9 @@ class PhimoeDecoderLayer(mindspore.nn.Cell):
 
         self.self_attn = PHIMOE_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
 
-        self.block_sparse_moe = PhimoeSparseMoeBlock(config)
-        self.input_layernorm = mindspore.mint.nn.LayerNorm(
-            config.hidden_size, eps=config.rms_norm_eps, elementwise_affine=True
-        )
-        self.post_attention_layernorm = mindspore.mint.nn.LayerNorm(
-            config.hidden_size, eps=config.rms_norm_eps, elementwise_affine=True
-        )
+        self.mlp = PhimoeSparseMoeBlock(config)
+        self.input_layernorm = PhimoeRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = PhimoeRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def construct(
         self,
@@ -720,7 +762,7 @@ class PhimoeDecoderLayer(mindspore.nn.Cell):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, router_logits = self.block_sparse_moe(hidden_states)
+        hidden_states, router_logits = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
@@ -857,7 +899,7 @@ class PhimoeModel(PhimoePreTrainedModel):
 
         hidden_states = inputs_embeds
 
-        position_embeddings = self.rotary_emb(hidden_states, seq_len=cache_position[-1] + 1)
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -1057,7 +1099,7 @@ class PhimoeModel(PhimoePreTrainedModel):
 
 
 class PhimoeForCausalLM(PhimoePreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config):
         super().__init__(config)

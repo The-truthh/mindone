@@ -40,15 +40,12 @@ DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-2}
 MODES = [1]
 
 
-class SeedOssModelTester(CausalLMModelTester(parent=None)):
+class SeedOssModelTester(CausalLMModelTester):
     base_model_class = SeedOssModel
     config_class = SeedOssConfig
 
-    def __init__(self):
-        super().__init__(parent=None)
 
-
-model_tester = SeedOssModelTester()
+model_tester = SeedOssModelTester(parent=None)
 (
     config,
     inputs_dict,

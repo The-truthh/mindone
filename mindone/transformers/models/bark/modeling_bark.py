@@ -677,12 +677,6 @@ class BarkCausalModel(BarkPreTrainedModel, GenerationMixin):
                 # from_seq_length is 1 to easily broadcast
                 attention_mask = _prepare_4d_attention_mask(attention_mask, input_embeds.dtype, tgt_len=1)
 
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape bsz x num_heads x N x N
-        # head_mask has shape num_layers x batch x num_heads x N x N
-        head_mask = self.get_head_mask(head_mask, self.config.num_layers)
-
         hidden_states = self.drop(input_embeds + position_embeds)
         output_shape = input_shape + (hidden_states.shape[-1],)
 
@@ -707,7 +701,7 @@ class BarkCausalModel(BarkPreTrainedModel, GenerationMixin):
                     hidden_states,
                     None,
                     attention_mask,
-                    head_mask[i],
+                    None,
                     use_cache,
                     output_attentions,
                 )
@@ -716,7 +710,6 @@ class BarkCausalModel(BarkPreTrainedModel, GenerationMixin):
                     hidden_states,
                     past_key_values=past_layer_key_values,
                     attention_mask=attention_mask,
-                    head_mask=head_mask[i],
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                 )
@@ -1319,8 +1312,6 @@ class BarkFineModel(BarkPreTrainedModel):
                 # from_seq_length is 1 to easily broadcast
                 attention_mask = _prepare_4d_attention_mask(attention_mask, input_embeds.dtype, tgt_len=1)
 
-        head_mask = self.get_head_mask(head_mask, self.config.num_layers)
-
         hidden_states = self.drop(input_embeds + position_embeds)
         output_shape = input_shape + (hidden_states.shape[-1],)
 
@@ -1334,7 +1325,6 @@ class BarkFineModel(BarkPreTrainedModel):
             outputs = block(
                 hidden_states,
                 attention_mask=attention_mask,
-                head_mask=head_mask[i],
                 output_attentions=output_attentions,
             )
 

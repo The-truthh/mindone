@@ -123,6 +123,7 @@ if transformers.__version__ >= "4.51.0":
                 boi_token_index=self.boi_token_index,
                 eoi_token_index=self.eoi_token_index,
                 image_token_index=self.image_token_index,
+                pad_token_id=None,
                 text_config=self.text_config,
                 vision_config=self.vision_config,
             )

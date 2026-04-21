@@ -625,12 +625,7 @@ class FSMTDecoder(nn.Cell):
             [DecoderLayer(config) for _ in range(config.decoder_layers)]
         )  # type: List[DecoderLayer]
 
-        embed_tokens_weight_shape = self.embed_tokens.weight.shape
-        self.output_projection = mint.nn.Linear(embed_tokens_weight_shape[1], embed_tokens_weight_shape[0], bias=False)
-        self.output_projection.weight = self.embed_tokens.weight
-
-    def _tie_weights(self):
-        self.embed_tokens.weight = self.output_projection.weight
+        self.output_projection = mint.nn.Linear(config.d_model, config.tgt_vocab_size, bias=False)
 
     def construct(
         self,
@@ -970,7 +965,10 @@ def _get_shape(t):
     FSMT_START_DOCSTRING,
 )
 class FSMTModel(PretrainedFSMTModel):
-    _tied_weights_keys = ["decoder.embed_tokens.weight", "decoder.output_projection.weight"]
+    _tied_weights_keys = {
+        "encoder.embed_tokens.weight": "decoder.embed_tokens.weight",
+        "decoder.output_projection.weight": "decoder.embed_tokens.weight",
+    }
 
     def __init__(self, config: FSMTConfig):
         super().__init__(config)
@@ -990,11 +988,6 @@ class FSMTModel(PretrainedFSMTModel):
 
     def get_decoder(self):
         return self.decoder
-
-    def _tie_weights(self):
-        if self.config.tie_word_embeddings:
-            self._tie_or_clone_weights(self.decoder.embed_tokens, self.get_input_embeddings())
-            self._tie_or_clone_weights(self.decoder.output_projection, self.get_input_embeddings())
 
     @add_start_docstrings_to_model_forward(FSMT_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
@@ -1112,7 +1105,6 @@ class FSMTModel(PretrainedFSMTModel):
 )
 class FSMTForConditionalGeneration(PretrainedFSMTModel, GenerationMixin):
     base_model_prefix = "model"
-    _tied_weights_keys = ["decoder.embed_tokens.weight", "decoder.output_projection.weight"]
 
     def __init__(self, config: FSMTConfig):
         super().__init__(config)

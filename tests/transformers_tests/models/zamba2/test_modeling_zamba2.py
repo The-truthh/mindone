@@ -126,6 +126,8 @@ class Zamba2ModelTester:
             initializer_range=self.initializer_range,
             pad_token_id=self.pad_token_id,
             head_dim=self.head_dim,
+            tie_word_embeddings=False,
+            use_mem_rope=True,
         )
 
 

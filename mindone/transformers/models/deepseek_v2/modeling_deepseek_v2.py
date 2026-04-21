@@ -40,54 +40,41 @@ from ...processing_utils import Unpack
 from ...utils import TransformersKwargs
 
 
-class DeepseekV2MoEGate(mindspore.nn.Cell):
-    def __init__(self, config: DeepseekV2Config):
+class DeepseekV2Experts(mindspore.nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config):
         super().__init__()
-        self.config = config
-        self.top_k = config.num_experts_per_tok
         self.num_experts = config.n_routed_experts
-        self.routed_scaling_factor = config.routed_scaling_factor
-        self.alpha = config.aux_loss_alpha
-        self.seq_aux = config.seq_aux
-        self.topk_method = config.topk_method
-        self.num_group = config.n_group
-        self.topk_group = config.topk_group
-
-        # topk selection algorithm
-        self.norm_topk_prob = config.norm_topk_prob
-        self.gating_dim = config.hidden_size
-        self.weight = mindspore.Parameter(mint.empty((self.num_experts, self.gating_dim)))
-
-    def construct(self, hidden_states: mindspore.Tensor) -> mindspore.Tensor:
-        batch_size, seq_len, hidden_dim = hidden_states.shape
-        # compute gating score
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        logits = mint.nn.functional.linear(
-            hidden_states.astype(mindspore.float32), self.weight.astype(mindspore.float32), None
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.moe_intermediate_size
+        self.gate_up_proj = mindspore.Parameter(
+            mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim))
         )
-        scores = logits.softmax(axis=-1, dtype=mindspore.float32)
+        self.down_proj = mindspore.Parameter(mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim)))
+        self.act_fn = ACT2FN[config.hidden_act]
 
-        # select top-k experts
-        # greedy method is used for DeepSeek-V2-Lite
-        # group_limited_greedy for DeepSeek-V2 and DeepSeek-V2-Chat
-        if self.topk_method == "greedy":
-            topk_weight, topk_idx = mint.topk(scores, k=self.top_k, dim=-1, sorted=False)
-        elif self.topk_method == "group_limited_greedy":
-            group_scores = scores.view(batch_size * seq_len, self.num_group, -1).max(dim=-1).values  # [n, num_group]
-            group_idx = mint.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
-            group_mask = mint.zeros_like(group_scores)  # [n, num_group]
-            group_mask.scatter_(1, group_idx, 1)  # [n, num_group]
-            score_mask = (
-                group_mask.unsqueeze(-1)
-                .broadcast_to((batch_size * seq_len, self.num_group, self.num_experts // self.num_group))
-                .reshape(batch_size * seq_len, -1)
-            )  # [n, e]
-            tmp_scores = scores.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
-            topk_weight, topk_idx = mint.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
+    def construct(
+        self,
+        hidden_states: mindspore.Tensor,
+        top_k_index: mindspore.Tensor,
+        top_k_weights: mindspore.Tensor,
+    ) -> mindspore.Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
 
-        topk_weight = topk_weight * self.routed_scaling_factor
-        # expert-level computation auxiliary loss
-        return topk_idx, topk_weight
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.astype(final_hidden_states.dtype))
+
+        return final_hidden_states
 
 
 class DeepseekV2MoE(mindspore.nn.Cell):
@@ -98,63 +85,52 @@ class DeepseekV2MoE(mindspore.nn.Cell):
     def __init__(self, config: DeepseekV2Config):
         super().__init__()
         self.config = config
-        self.num_experts_per_tok = config.num_experts_per_tok
-
-        self.experts = mindspore.nn.CellList(
-            [
-                (DeepseekV2MLP(config, intermediate_size=config.moe_intermediate_size))
-                for _ in range(config.n_routed_experts)
-            ]
-        )
-        self.gate = DeepseekV2MoEGate(config)
+        self.experts = DeepseekV2Experts(config)
+        self.gate = mint.nn.Linear(config.hidden_size, config.n_routed_experts, bias=False)
         if config.n_shared_experts is not None:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
             self.shared_experts = DeepseekV2MLP(config=config, intermediate_size=intermediate_size)
-        self.ep_rank = 0
-        self.experts_per_rank = config.n_routed_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.topk_method = config.topk_method
+        self.num_group = config.n_group
+        self.top_k = config.num_experts_per_tok
+        self.topk_group = config.topk_group
 
-    def moe(
-        self, hidden_states: mindspore.Tensor, topk_ids: mindspore.Tensor, topk_weight: mindspore.Tensor
-    ) -> mindspore.Tensor:
-        cnts = mint.zeros((topk_ids.shape[0], len(self.experts)), dtype=topk_ids.dtype)
-        cnts.scatter_(1, topk_ids, 1)
-        tokens_per_expert = cnts.sum(dim=0)
-        indices = topk_ids.view(-1).argsort()
-        sorted_tokens = hidden_states[indices // topk_ids.shape[1]]
+    def route_tokens_to_experts(self, router_logits):
+        if router_logits.dim() == 3:
+            batch_size, seq_len, hidden_dim = router_logits.shape
+        else:
+            batch_size, hidden_dim = router_logits.shape
+            seq_len = 1
+        router_logits = router_logits.view(-1, hidden_dim)
+        router_logits = router_logits.softmax(axis=-1, dtype=mindspore.float32)
+        if self.topk_method == "greedy":
+            topk_weight, topk_idx = mint.topk(router_logits, k=self.top_k, dim=-1, sorted=False)
+        elif self.topk_method == "group_limited_greedy":
+            group_scores = router_logits.view(batch_size * seq_len, self.num_group, -1).max(dim=-1).values
+            group_idx = mint.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
+            group_mask = mint.zeros_like(group_scores)
+            group_mask.scatter_(1, group_idx, 1)
+            score_mask = (
+                group_mask.unsqueeze(-1)
+                .broadcast_to((batch_size * seq_len, self.num_group, self.experts.num_experts // self.num_group))
+                .reshape(batch_size * seq_len, -1)
+            )
+            tmp_scores = router_logits.masked_fill(~score_mask.bool(), 0.0)
+            topk_weight, topk_idx = mint.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
 
-        # Process experts
-        outputs = []
-        start_idx = 0
-        for i, num_tokens in enumerate(tokens_per_expert):
-            if num_tokens == 0:
-                continue
-            end_idx = start_idx + num_tokens
-            expert = self.experts[i + self.ep_rank * self.experts_per_rank]
-            tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
-            expert_out = expert(tokens_for_this_expert)
-            outputs.append(expert_out)
-            start_idx = end_idx
-
-        outs = mint.cat(outputs, dim=0) if outputs else mint.zeros((0,), dtype=sorted_tokens.dtype)
-
-        # Reorder and combine outputs
-        new_x = mint.empty_like(outs)
-        new_x[indices] = outs
-        hidden_states = (
-            new_x.view(*topk_ids.shape, -1)
-            .astype(topk_weight.dtype)
-            .mul_(topk_weight.unsqueeze(dim=-1))
-            .sum(dim=1)
-            .astype(new_x.dtype)
-        )
-        return hidden_states
+        topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_idx, topk_weight
 
     def construct(self, hidden_states: mindspore.Tensor) -> mindspore.Tensor:
         residuals = hidden_states
         orig_shape = hidden_states.shape
-        topk_indices, topk_weights = self.gate(hidden_states)
+        router_logits = mint.nn.functional.linear(
+            hidden_states.astype(mindspore.float32), self.gate.weight.astype(mindspore.float32), None
+        )
+        topk_indices, topk_weights = self.route_tokens_to_experts(router_logits)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        hidden_states = self.moe(hidden_states, topk_indices, topk_weights).view(*orig_shape)
+        hidden_states = self.experts(hidden_states, topk_indices, topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states
 
@@ -200,17 +176,12 @@ class DeepseekV2RotaryEmbedding(mindspore.nn.Cell):
 
     def __init__(self, config: DeepseekV2Config):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        self.rope_type = (
-            config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-            if config.rope_scaling is not None
-            else "default"
-        )
-
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+
+        self.rope_type = self.config.rope_parameters["rope_type"]
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
@@ -301,7 +272,6 @@ class DeepseekV2Attention(mindspore.nn.Cell):
         self.num_heads = config.num_attention_heads
         self.head_dim = config.head_dim
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
         self.q_lora_rank = config.q_lora_rank
         self.qk_rope_head_dim = config.qk_rope_head_dim
         self.kv_lora_rank = config.kv_lora_rank
@@ -472,12 +442,19 @@ class DeepseekV2PreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module):
         super()._init_weights(module)
-        if isinstance(module, DeepseekV2MoEGate):
-            module.weight.set_data(
+        if isinstance(module, DeepseekV2Experts):
+            module.gate_up_proj.set_data(
                 initializer(
                     Normal(sigma=self.config.initializer_range, mean=0.0),
-                    module.weight.shape,
-                    module.weight.dtype,
+                    module.gate_up_proj.shape,
+                    module.gate_up_proj.dtype,
+                )
+            )
+            module.down_proj.set_data(
+                initializer(
+                    Normal(sigma=self.config.initializer_range, mean=0.0),
+                    module.down_proj.shape,
+                    module.down_proj.dtype,
                 )
             )
 

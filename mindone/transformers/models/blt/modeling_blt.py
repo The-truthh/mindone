@@ -205,20 +205,30 @@ class BltRotaryEmbedding(nn.Cell):
 
     def __init__(self, config: BltConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        self.rope_type = self.config.rope_parameters["rope_type"]
+        self.rope_init_fn = self.compute_default_rope_parameters
+        if self.rope_type != "default":
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
         self.inv_freq = ms.Parameter(inv_freq, requires_grad=False, name="inv_freq")
         self.original_inv_freq = self.inv_freq
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: BltConfig,
+        seq_len: Optional[int] = None,
+    ) -> tuple[ms.Tensor, float]:
+        base = config.rope_parameters["rope_theta"]
+        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+
+        attention_factor = 1.0
+        inv_freq = 1.0 / (base ** (mint.arange(0, dim, 2, dtype=ms.int64).float() / dim))
+        return inv_freq, attention_factor
 
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def construct(self, x, position_ids):
@@ -390,7 +400,6 @@ class BltSelfAttention(nn.Cell):
         self.head_dim = config.hidden_size // self.num_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.scaling = self.head_dim**-0.5
-        self.rope_theta = config.rope_theta
         self.layer_idx = layer_idx
 
         self.q_proj = mint.nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)

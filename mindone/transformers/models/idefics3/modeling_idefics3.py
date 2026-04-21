@@ -181,8 +181,8 @@ class Idefics3VisionEmbeddings(nn.Cell):
             h_indices = mint.arange(nb_patches_h.item(), dtype=ms.float32)
             w_indices = mint.arange(nb_patches_w.item(), dtype=ms.float32)
 
-            fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
-            fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
+            fractional_coords_h = mint.minimum(h_indices / nb_patches_h, ms.tensor(1.0 - 1e-6, dtype=ms.float32))
+            fractional_coords_w = mint.minimum(w_indices / nb_patches_w, ms.tensor(1.0 - 1e-6, dtype=ms.float32))
 
             bucket_coords_h = ops.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = ops.bucketize(fractional_coords_w, boundaries, right=True)

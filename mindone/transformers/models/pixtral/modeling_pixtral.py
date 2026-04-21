@@ -61,9 +61,14 @@ class PixtralRotaryEmbedding(nn.Cell):
 
     def __init__(self, config):
         super().__init__()
-        self.rope_type = "default"
+        self.config = config
+        self.rope_type = self.config.rope_parameters["rope_type"]
+        if self.rope_type != "default":
+            raise ValueError(
+                f"{self.__class__.__name__} does not support non-default RoPE, but got `rope_type={self.rope_type}`"
+            )
         self.dim = config.head_dim
-        self.base = config.rope_theta
+        self.base = config.rope_parameters["rope_theta"]
         max_patches_per_side = config.image_size // config.patch_size
         freqs = 1.0 / (self.base ** (mint.arange(0, self.dim, 2).float() / self.dim))
 

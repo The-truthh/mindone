@@ -302,10 +302,6 @@ class MraSelfAttention(mindspore.nn.Cell):
         self.value = mindspore.mint.nn.Linear(config.hidden_size, self.all_head_size)
 
         self.dropout = mindspore.mint.nn.Dropout(config.attention_probs_dropout_prob)
-        self.position_embedding_type = (
-            position_embedding_type if position_embedding_type is not None else config.position_embedding_type
-        )
-
         self.num_block = (config.max_position_embeddings // 32) * config.block_per_row
         self.num_block = min(self.num_block, int((config.max_position_embeddings // 32) ** 2))
 

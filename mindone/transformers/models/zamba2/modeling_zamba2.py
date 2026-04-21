@@ -197,19 +197,29 @@ class Zamba2RotaryEmbedding(nn.Cell):
         device=None,
     ):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        # we cannot use the config here to parameterize because of a factor 2 for the head_dim
-        self.inv_freq, self.attention_scaling = self.rope_init_fn(base=config.rope_theta, dim=config.attention_head_dim)
+
+        self.rope_type = self.config.rope_parameters["rope_type"]
+        rope_init_fn: Callable = self.compute_default_rope_parameters
+        if self.rope_type != "default":
+            rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        self.inv_freq, self.attention_scaling = rope_init_fn(self.config)
         self.original_inv_freq = self.inv_freq
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: Zamba2Config | None = None,
+        seq_len: int | None = None,
+    ) -> tuple[ms.Tensor, float]:
+        base = config.rope_parameters["rope_theta"]
+        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+
+        attention_factor = 1.0
+        inv_freq = 1.0 / (base ** (mint.arange(0, dim, 2, dtype=ms.int64).float() / dim))
+        return inv_freq, attention_factor
 
     # fixme currently graph mode dose not dynamic_rope_update. To write a graceful if-else branch.
     # @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)

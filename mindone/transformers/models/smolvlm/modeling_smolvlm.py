@@ -141,8 +141,8 @@ class SmolVLMVisionEmbeddings(nn.Cell):
             h_indices = mint.arange(nb_patches_h.item(), dtype=pixel_values.dtype)
             w_indices = mint.arange(nb_patches_w.item(), dtype=pixel_values.dtype)
 
-            fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
-            fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
+            fractional_coords_h = mint.clamp(h_indices / nb_patches_h, max=(1.0 - 1e-6))
+            fractional_coords_w = mint.clamp(w_indices / nb_patches_w, max=(1.0 - 1e-6))
 
             # NOTE ops.bucketize does not support bf16/fp16 tensor input
             bucket_coords_h = ops.bucketize(fractional_coords_h.float(), boundaries.tolist(), right=True)

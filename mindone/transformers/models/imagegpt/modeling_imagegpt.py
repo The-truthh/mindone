@@ -159,10 +159,6 @@ class ImageGPTAttention(nn.Cell):
         attn_weights = attn_weights.type(value.dtype)
         attn_weights = self.attn_dropout(attn_weights)
 
-        # Mask heads if we want to
-        if head_mask is not None:
-            attn_weights = attn_weights * head_mask
-
         attn_output = mint.matmul(attn_weights, value)
 
         return attn_output, attn_weights
@@ -211,10 +207,6 @@ class ImageGPTAttention(nn.Cell):
             raise RuntimeError("Error with upcasting, attn_weights does not have dtype mint.float32")
         attn_weights = attn_weights.type(value.dtype)
         attn_weights = self.attn_dropout(attn_weights)
-
-        # Mask heads if we want to
-        if head_mask is not None:
-            attn_weights = attn_weights * head_mask
 
         attn_output = mint.matmul(attn_weights, value)
 

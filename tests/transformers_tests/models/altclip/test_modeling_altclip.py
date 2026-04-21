@@ -127,8 +127,11 @@ class AltCLIPModelTester:
             hidden_act=self.vision_hidden_act,
             attention_dropout=self.vision_attention_dropout,
         )
-        config = AltCLIPConfig.from_text_vision_configs(
-            text_cfg, vision_cfg, projection_dim=self.projection_dim, logit_scale_init_value=self.logit_scale_init_value
+        config = AltCLIPConfig(
+            text_config=text_cfg,
+            vision_config=vision_cfg,
+            projection_dim=self.projection_dim,
+            logit_scale_init_value=self.logit_scale_init_value,
         )
         return config, text_cfg, vision_cfg, input_ids, attention_mask, pixel_values
 

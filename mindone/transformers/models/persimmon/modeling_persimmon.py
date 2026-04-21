@@ -55,11 +55,7 @@ _CONFIG_FOR_DOC = "PersimmonConfig"
 class PersimmonRotaryEmbedding(nn.Cell):
     def __init__(self, config: PersimmonConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        self.rope_type = config.rope_parameters["rope_type"]
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
@@ -177,8 +173,7 @@ class PersimmonAttention(nn.Cell):
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
-        self.rope_theta = config.rope_theta
-        self.rotary_ndims = int(self.head_dim * config.partial_rotary_factor)
+        self.rotary_ndims = int(self.head_dim * config.rope_parameters["partial_rotary_factor"])
         self.is_causal = True
 
         if (self.head_dim * self.num_heads) != self.hidden_size:

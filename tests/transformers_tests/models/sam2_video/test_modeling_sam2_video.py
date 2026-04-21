@@ -17,6 +17,8 @@
 # limitations under the License.
 """Testing suite for the MindSpore SAM2 Video model."""
 
+import types
+
 import numpy as np
 import pytest
 import torch
@@ -39,6 +41,31 @@ from tests.transformers_tests.models.modeling_common import floats_numpy
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-2}
 MODES = [1]
+
+
+def _patch_pt_prepare_vision_features(pt_model):
+    # transformers v5 stores the processed positions as `fpn_position_encoding`,
+    # while `_prepare_vision_features` currently reads `fpn_position_embeddings`.
+    def _prepare_vision_features(self, inference_session, frame_idx, batch_size):
+        if cached_features := inference_session.cache.get_vision_features(frame_idx):
+            vision_feats = cached_features["vision_feats"]
+            vision_pos_embeds = cached_features["vision_pos_embeds"]
+        else:
+            image_batch = inference_session.get_frame(frame_idx).unsqueeze(0)
+            image_outputs = self.get_image_features(image_batch, return_dict=True)
+            vision_feats = image_outputs.fpn_hidden_states
+            vision_pos_embeds = image_outputs.fpn_position_encoding
+            inference_session.cache.cache_vision_features(
+                frame_idx, {"vision_feats": vision_feats, "vision_pos_embeds": vision_pos_embeds}
+            )
+
+        if batch_size > 1:
+            vision_feats = vision_feats.expand(batch_size, -1, -1, -1)
+            vision_pos_embeds = [pe.expand(batch_size, -1, -1, -1) for pe in vision_pos_embeds]
+
+        return vision_feats, vision_pos_embeds
+
+    pt_model._prepare_vision_features = types.MethodType(_prepare_vision_features, pt_model)
 
 
 class Sam2VideoPromptEncoderTester:
@@ -253,6 +280,7 @@ def test_named_modules(
     ms.set_context(mode=mode)
 
     (pt_model, ms_model, pt_dtype, ms_dtype) = get_modules(pt_module, ms_module, dtype, *init_args, **init_kwargs)
+    _patch_pt_prepare_vision_features(pt_model)
 
     # Make a copy of inputs_kwargs to avoid modifying the original
     inputs_kwargs = dict(inputs_kwargs) if inputs_kwargs else {}

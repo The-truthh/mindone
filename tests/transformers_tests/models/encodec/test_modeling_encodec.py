@@ -33,7 +33,8 @@ if version.parse(current_ms_ver) < version.parse("2.7.0"):
     # fp16 & bf16 will lead to ops.assign error in ms 2.6.0 or lower
     DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
 else:
-    DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 1e-2}
+    # fp16 is not enabled because torch.nn.functional.pad with reflection mode is not supported for Half on CPU.
+    DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "bf16": 1e-2}
 
 MODES = [1]
 

@@ -967,7 +967,7 @@ class SEWPreTrainedModel(PreTrainedModel):
             #         with deepspeed.zero.GatheredParameters(module.weight, modifier_rank=0):
             #             nn.init.kaiming_normal_(module.weight.data)
             # else:
-            module.weight.data.set_data(initializer(HeNormal(), module.weight.data.shape, module.weight.data.dtype))
+            module.weight.set_data(initializer(HeNormal(), module.weight.shape, module.weight.dtype))
 
         if isinstance(module, (mint.nn.Linear, nn.Conv1d)) and module.bias is not None:
             module.bias.data.zero_()

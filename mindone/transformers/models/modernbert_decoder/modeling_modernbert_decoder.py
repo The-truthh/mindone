@@ -97,20 +97,20 @@ class ModernBertDecoderMLP(nn.Cell):
 class ModernBertDecoderRotaryEmbedding(nn.Cell):
     inv_freq: Tensor  # fix linting for `register_buffer`
 
-    def __init__(self, config: ModernBertDecoderConfig):
+    def __init__(self, config: ModernBertDecoderConfig, layer_type: str):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        rope_params = self.config.rope_parameters[layer_type]
+        self.rope_type = rope_params["rope_type"]
+        base = rope_params["rope_theta"]
+        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
+        self.rope_init_fn = None
+        inv_freq = 1.0 / (base ** (mint.arange(0, dim, 2, dtype=mindspore.int64).float() / dim))
+        self.attention_scaling = 1.0
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
@@ -419,8 +419,8 @@ class ModernBertDecoderModel(ModernBertDecoderPreTrainedModel):
         self.final_norm = mint.nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
         self.gradient_checkpointing = False
 
-        self.global_rotary_emb = ModernBertDecoderRotaryEmbedding(config=config)
-        self.local_rotary_emb = ModernBertDecoderRotaryEmbedding(config=config)
+        self.global_rotary_emb = ModernBertDecoderRotaryEmbedding(config=config, layer_type="full_attention")
+        self.local_rotary_emb = ModernBertDecoderRotaryEmbedding(config=config, layer_type="sliding_attention")
 
         self.post_init()
 

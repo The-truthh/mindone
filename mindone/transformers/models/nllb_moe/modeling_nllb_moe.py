@@ -415,6 +415,40 @@ class NllbMoeDenseActDense(mindspore.nn.Cell):
         return hidden_states
 
 
+class NllbMoeExperts(mindspore.nn.CellDict):
+    def __init__(self, config: NllbMoeConfig, ffn_dim: int):
+        super().__init__()
+        self.num_experts = config.num_experts
+        for idx in range(self.num_experts):
+            self[f"expert_{idx}"] = NllbMoeDenseActDense(config, ffn_dim)
+        self.moe_token_dropout = config.moe_token_dropout
+        self.token_dropout = mindspore.mint.nn.Dropout(self.moe_token_dropout)
+
+    def construct(self, hidden_states: mindspore.Tensor, router_mask: mindspore.Tensor, router_probs: mindspore.Tensor):
+        final_hidden_states = mindspore.mint.zeros_like(hidden_states)
+        expert_mask = mindspore.mint.nn.functional.one_hot(
+            router_mask.to(mindspore.int64), num_classes=self.num_experts
+        ).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            idx, top_x = mindspore.mint.where(expert_mask[expert_idx].squeeze(0))
+            if top_x.shape[0] == 0:
+                continue
+            current_state = hidden_states[None, top_x].reshape(-1, hidden_states.shape[-1])
+            current_hidden_states = self[f"expert_{expert_idx}"](current_state) * router_probs[top_x, idx, None]
+            if self.moe_token_dropout > 0:
+                if self.training:
+                    current_hidden_states = self.token_dropout(current_hidden_states)
+                else:
+                    current_hidden_states *= 1 - self.moe_token_dropout
+            final_hidden_states = mindspore.ops.tensor_scatter_add(
+                final_hidden_states,
+                top_x.reshape(-1, 1),
+                current_hidden_states.to(hidden_states.dtype),
+            )
+        return final_hidden_states
+
+
 class NllbMoeSparseMLP(mindspore.nn.Cell):
     r"""
     Implementation of the NLLB-MoE sparse MLP module.
@@ -423,13 +457,13 @@ class NllbMoeSparseMLP(mindspore.nn.Cell):
     def __init__(self, config: NllbMoeConfig, ffn_dim: int, expert_class: mindspore.nn.Cell = NllbMoeDenseActDense):
         super().__init__()
         self.router = NllbMoeTop2Router(config)
-        self.moe_token_dropout = config.moe_token_dropout
-        self.token_dropout = mindspore.mint.nn.Dropout(self.moe_token_dropout)
         self.num_experts = config.num_experts
-
-        self.experts = mindspore.nn.CellDict()
-        for idx in range(self.num_experts):
-            self.experts[f"expert_{idx}"] = expert_class(config, ffn_dim)
+        if expert_class is NllbMoeDenseActDense:
+            self.experts = NllbMoeExperts(config, ffn_dim)
+        else:
+            self.experts = mindspore.nn.CellDict()
+            for idx in range(self.num_experts):
+                self.experts[f"expert_{idx}"] = expert_class(config, ffn_dim)
 
     def construct(self, hidden_states: mindspore.Tensor, padding_mask: Optional[mindspore.Tensor] = False):
         r"""
@@ -460,23 +494,9 @@ class NllbMoeSparseMLP(mindspore.nn.Cell):
         """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
 
-        top_1_mask, router_probs = self.router(hidden_states, padding_mask)
-        router_mask = router_probs.bool()
         hidden_states = hidden_states.reshape((batch_size * sequence_length), hidden_dim)
-        masked_hidden_states = mindspore.mint.einsum("bm,be->ebm", hidden_states, router_mask)
-        for idx, expert in enumerate(self.experts.values()):
-            token_indices = router_mask[:, idx]
-            combining_weights = router_probs[token_indices, idx]
-            expert_output = expert(masked_hidden_states[idx, token_indices])
-            if self.moe_token_dropout > 0:
-                if self.training:
-                    expert_output = self.token_dropout(expert_output)
-                else:
-                    expert_output *= 1 - self.moe_token_dropout
-            masked_hidden_states[idx, token_indices] = mindspore.mint.einsum(
-                "b,be->be", combining_weights, expert_output
-            )
-        hidden_states = masked_hidden_states.sum(dim=0).reshape(batch_size, sequence_length, hidden_dim)
+        top_1_mask, router_probs = self.router(hidden_states.reshape(batch_size, sequence_length, hidden_dim), padding_mask)
+        hidden_states = self.experts(hidden_states, top_1_mask, router_probs).reshape(batch_size, sequence_length, hidden_dim)
 
         top_1_expert_index = mindspore.mint.argmax(top_1_mask, dim=-1)
         return hidden_states, (router_probs, top_1_expert_index)
@@ -491,7 +511,6 @@ def eager_attention_forward(
     attention_mask: Optional[mindspore.Tensor],
     scaling: Optional[float] = None,
     dropout: float = 0.0,
-    head_mask: Optional[mindspore.Tensor] = None,
     **kwargs,
 ):
     if scaling is None:
@@ -502,9 +521,6 @@ def eager_attention_forward(
         attn_weights = attn_weights + attention_mask
 
     attn_weights = mindspore.mint.nn.functional.softmax(attn_weights, dim=-1)
-
-    if head_mask is not None:
-        attn_weights = attn_weights * head_mask.view(1, -1, 1, 1)
 
     attn_weights = mindspore.mint.nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = mindspore.mint.matmul(attn_weights, value)
@@ -1440,7 +1456,10 @@ class NllbMoeDecoder(NllbMoePreTrainedModel):
 
 
 class NllbMoeModel(NllbMoePreTrainedModel):
-    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight"]
+    _tied_weights_keys = {
+        "encoder.embed_tokens.weight": "shared.weight",
+        "decoder.embed_tokens.weight": "shared.weight",
+    }
 
     def __init__(self, config: NllbMoeConfig):
         super().__init__(config)
@@ -1591,7 +1610,9 @@ class NllbMoeModel(NllbMoePreTrainedModel):
 
 class NllbMoeForConditionalGeneration(NllbMoePreTrainedModel, GenerationMixin):
     base_model_prefix = "model"
-    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight", "lm_head.weight"]
+    _tied_weights_keys = {
+        "lm_head.weight": "model.shared.weight",
+    }
 
     def __init__(self, config: NllbMoeConfig):
         super().__init__(config)

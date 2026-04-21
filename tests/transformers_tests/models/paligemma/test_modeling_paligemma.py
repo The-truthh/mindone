@@ -22,6 +22,7 @@ import inspect
 import numpy as np
 import pytest
 import torch
+import transformers.models.paligemma.modeling_paligemma as pt_paligemma_modeling
 from transformers.models.paligemma.configuration_paligemma import PaliGemmaConfig
 
 import mindspore as ms
@@ -38,6 +39,51 @@ from ..modeling_common import floats_numpy, ids_numpy
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-2}
 MODE = [1]
+
+
+def _pt_create_causal_mask_mapping_compat(
+    config,
+    input_embeds,
+    attention_mask,
+    cache_position,
+    past_key_values,
+    position_ids,
+    token_type_ids=None,
+    pixel_values=None,
+    is_training=False,
+    **kwargs,
+):
+    if attention_mask is not None and attention_mask.dim() == 4:
+        return attention_mask
+
+    sequence_length = input_embeds.shape[1]
+    target_length = attention_mask.shape[-1] if attention_mask is not None else sequence_length
+    min_dtype = torch.finfo(input_embeds.dtype).min
+    causal_mask = torch.full(
+        (sequence_length, target_length), fill_value=min_dtype, dtype=input_embeds.dtype, device=input_embeds.device
+    )
+
+    if sequence_length != 1:
+        if is_training:
+            causal_mask = torch.triu(causal_mask, diagonal=1)
+        else:
+            causal_mask[:, :sequence_length] = 0.0
+
+    causal_mask *= torch.arange(target_length, device=input_embeds.device) > cache_position.reshape(-1, 1)
+    causal_mask = causal_mask[None, None, :, :].expand(input_embeds.shape[0], 1, -1, -1)
+
+    if attention_mask is not None:
+        causal_mask = causal_mask.clone()
+        mask_length = attention_mask.shape[-1]
+        padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
+        padding_mask = padding_mask == 0
+        causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(padding_mask, min_dtype)
+        if is_training:
+            causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
+                token_type_ids[:, None, None, :] == 0, 0
+            )
+
+    return causal_mask
 
 
 class PaliGemmaVisionText2TextModelTester:
@@ -227,6 +273,7 @@ def test_named_modules_1(
     mode,
 ):
     ms.set_context(mode=mode)
+    pt_paligemma_modeling.create_causal_mask_mapping = _pt_create_causal_mask_mapping_compat
 
     (
         pt_model,

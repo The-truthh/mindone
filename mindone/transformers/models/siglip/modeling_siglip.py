@@ -485,7 +485,7 @@ class SiglipTextModel(SiglipPreTrainedModel):
     def set_input_embeddings(self, value):
         self.text_model.embeddings.token_embedding = value
 
-    @check_model_inputs
+    @check_model_inputs(tie_last_hidden_states=False)
     def construct(
         self,
         input_ids: Optional[ms.Tensor] = None,
@@ -603,7 +603,7 @@ class SiglipVisionModel(SiglipPreTrainedModel):
     def get_input_embeddings(self) -> nn.Cell:
         return self.vision_model.embeddings.patch_embedding
 
-    @check_model_inputs
+    @check_model_inputs(tie_last_hidden_states=False)
     def construct(
         self,
         pixel_values,

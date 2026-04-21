@@ -367,9 +367,6 @@ class CTRLModel(CTRLPreTrainedModel):
             attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
             attention_mask = (1.0 - attention_mask) * dtype_to_min(self.dtype)
 
-        # Prepare head mask if needed
-        head_mask = self.get_head_mask(head_mask, self.config.n_layer)
-
         if token_type_ids is not None:
             token_type_ids = token_type_ids.view(-1, input_shape[-1])
             token_type_embeds = self.w(token_type_ids)
@@ -404,7 +401,7 @@ class CTRLModel(CTRLPreTrainedModel):
                 mask,
                 layer_past=layer_past,
                 attention_mask=attention_mask,
-                head_mask=head_mask[i],
+                head_mask=None,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
             )

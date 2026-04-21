@@ -143,6 +143,7 @@ class JetMoeModelTester:
             initializer_range=self.initializer_range,
             rms_norm_eps=self.rms_norm_eps,
             use_cache=self.use_cache,
+            pad_token_id=None,
             bos_token_id=self.bos_token_id,
             eos_token_id=self.eos_token_id,
             rope_theta=self.rope_theta,

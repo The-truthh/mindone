@@ -199,7 +199,7 @@ class EncoderDecoderModel(PreTrainedModel, GenerationMixin):
             if not isinstance(config, self.config_class):
                 raise ValueError(f"Config: {config} has to be of type {self.config_class}")
 
-        if config.decoder.cross_attention_hidden_size is not None:
+        if getattr(config.decoder, "cross_attention_hidden_size", None) is not None:
             if config.decoder.cross_attention_hidden_size != config.encoder.hidden_size:
                 raise ValueError(
                     "If `cross_attention_hidden_size` is specified in the decoder's configuration, it has to be equal"
@@ -246,7 +246,7 @@ class EncoderDecoderModel(PreTrainedModel, GenerationMixin):
         # encoder outputs might need to be projected to different dimension for decoder
         if (
             self.encoder.config.hidden_size != self.decoder.config.hidden_size
-            and self.decoder.config.cross_attention_hidden_size is None
+            and getattr(self.decoder.config, "cross_attention_hidden_size", None) is None
         ):
             self.enc_to_dec_proj = mint.nn.Linear(self.encoder.config.hidden_size, self.decoder.config.hidden_size)
 
@@ -269,7 +269,7 @@ class EncoderDecoderModel(PreTrainedModel, GenerationMixin):
         self.encoder.tie_weights()
         self.decoder.tie_weights()
         # tie encoder & decoder if needed
-        if self.config.tie_encoder_decoder:
+        if getattr(self.config, "tie_encoder_decoder", False):
             # tie encoder and decoder base model
             decoder_base_model_prefix = self.decoder.base_model_prefix
             tied_weights = self._tie_encoder_decoder_weights(
@@ -544,7 +544,7 @@ class EncoderDecoderModel(PreTrainedModel, GenerationMixin):
         # optionally project encoder_hidden_states
         if (
             self.encoder.config.hidden_size != self.decoder.config.hidden_size
-            and self.decoder.config.cross_attention_hidden_size is None
+            and getattr(self.decoder.config, "cross_attention_hidden_size", None) is None
         ):
             encoder_hidden_states = self.enc_to_dec_proj(encoder_hidden_states)
 

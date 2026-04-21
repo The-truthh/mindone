@@ -222,9 +222,7 @@ vision_model_tester = AlignVisionModelTester()
 vision_config, pixel_values = vision_model_tester.prepare_config_and_inputs()
 
 # Combined config for AlignModel
-align_config = AlignConfig.from_text_vision_configs(
-    text_config=text_config, vision_config=vision_config, projection_dim=40
-)
+align_config = AlignConfig(text_config=text_config, vision_config=vision_config, projection_dim=40)
 
 
 ALIGN_TEXT_CASES = [

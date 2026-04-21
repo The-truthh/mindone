@@ -117,15 +117,20 @@ def test_named_modules(
         pt_inputs_kwargs.update({"hidden_dtype": PT_DTYPE_MAPPING[pt_dtype]})
         ms_inputs_kwargs.update({"hidden_dtype": MS_DTYPE_MAPPING[ms_dtype]})
 
-    # model.layers[1].mlp.gate.weight need to be fp32 in source code,
-    # but models in ut will be set dtype to specific dtype.
-    # Here, model.layers[1].mlp.gate.weight is hardcoded as fp32.
+    # The router weight is initialized to zeros upstream. PyTorch and MindSpore choose different top-k indices
+    # when all routing scores are tied, so use the same deterministic non-zero fp32 router weight in both models.
+    gate_weight = np.linspace(
+        -0.01,
+        0.01,
+        config.moe_num_experts * config.hidden_size,
+        dtype=np.float32,
+    ).reshape(config.moe_num_experts, config.hidden_size)
     if name == "Ernie4_5_MoeModel":
-        ms_model.layers[1].mlp.gate.weight.set_dtype(ms.float32)
-        pt_model.layers[1].mlp.gate.weight.data = pt_model.layers[1].mlp.gate.weight.data.to(torch.float32)
+        ms_model.layers[1].mlp.gate.weight.set_data(ms.Tensor(gate_weight, ms.float32))
+        pt_model.layers[1].mlp.gate.weight.data = torch.tensor(gate_weight, dtype=torch.float32)
     elif name == "Ernie4_5_MoeForCausalLM":
-        ms_model.model.layers[1].mlp.gate.weight.set_dtype(ms.float32)
-        pt_model.model.layers[1].mlp.gate.weight.data = pt_model.model.layers[1].mlp.gate.weight.data.to(torch.float32)
+        ms_model.model.layers[1].mlp.gate.weight.set_data(ms.Tensor(gate_weight, ms.float32))
+        pt_model.model.layers[1].mlp.gate.weight.data = torch.tensor(gate_weight, dtype=torch.float32)
 
     with torch.no_grad():
         pt_outputs = pt_model(*pt_inputs_args, **pt_inputs_kwargs)

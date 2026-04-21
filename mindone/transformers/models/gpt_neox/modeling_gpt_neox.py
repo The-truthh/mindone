@@ -31,6 +31,22 @@ from ...utils import TransformersKwargs, logging
 logger = logging.get_logger(__name__)
 
 
+def _get_rope_parameters(config: GPTNeoXConfig):
+    rope_parameters = getattr(config, "rope_parameters", None)
+    if rope_parameters is not None:
+        return rope_parameters
+
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if rope_scaling is not None:
+        return rope_scaling
+
+    return {
+        "rope_theta": getattr(config, "rotary_emb_base", 10000),
+        "partial_rotary_factor": getattr(config, "rotary_pct", 0.25),
+        "rope_type": "default",
+    }
+
+
 class HybridCache(object):
     """This class do nothing and will be never used in our implement."""
 
@@ -132,7 +148,7 @@ class GPTNeoXAttention(nn.Cell):
         self.config = config
         self.head_size = config.hidden_size // config.num_attention_heads
         self.attention_dropout = config.attention_dropout
-        self.rotary_ndims = int(self.head_size * config.rotary_pct)
+        self.rotary_ndims = int(self.head_size * _get_rope_parameters(config).get("partial_rotary_factor", 1.0))
         self.scaling = self.head_size**-0.5
         self.is_causal = True
         self.layer_idx = layer_idx
@@ -257,11 +273,8 @@ class GPTNeoXLayer(nn.Cell):
 class GPTNeoXRotaryEmbedding(nn.Cell):
     def __init__(self, config: GPTNeoXConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        rope_parameters = _get_rope_parameters(config)
+        self.rope_type = rope_parameters.get("rope_type", rope_parameters.get("type", "default"))
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 

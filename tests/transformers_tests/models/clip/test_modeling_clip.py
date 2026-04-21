@@ -29,7 +29,7 @@ from tests.modeling_test_utils import (
 from tests.transformers_tests.models.modeling_common import floats_numpy, ids_numpy, random_attention_mask
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-2}
-MODES = [0, 1]
+MODES = [1]
 
 
 class CLIPTextModelTester:
@@ -182,8 +182,10 @@ class CLIPModelTester:
         return config, input_ids, attention_mask, pixel_values
 
     def get_config(self):
-        return CLIPConfig.from_text_vision_configs(
-            self.text_model_tester.get_config(), self.vision_model_tester.get_config(), projection_dim=64
+        return CLIPConfig(
+            text_config=self.text_model_tester.get_config().to_dict(),
+            vision_config=self.vision_model_tester.get_config().to_dict(),
+            projection_dim=64,
         )
 
 

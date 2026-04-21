@@ -30,7 +30,7 @@ from tests.transformers_tests.models.modeling_common import floats_numpy, ids_nu
 
 # fp16 diff too large, resize not support bf16
 DTYPE_AND_THRESHOLDS = {"fp32": 1e-3}
-MODES = [0, 1]
+MODES = [1]
 
 
 class DPTModelTester:

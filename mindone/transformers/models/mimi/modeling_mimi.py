@@ -516,7 +516,9 @@ class MimiRotaryEmbedding(nn.Cell):
     def __init__(self, config: MimiConfig):
         super().__init__()
         # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
+        if hasattr(config, "rope_parameters") and isinstance(config.rope_parameters, dict):
+            self.rope_type = config.rope_parameters.get("rope_type", config.rope_parameters.get("type"))
+        elif hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
             self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
         else:
             self.rope_type = "default"
@@ -636,7 +638,6 @@ class MimiAttention(nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
         self.is_causal = True
         self.scaling = 1 / math.sqrt(config.head_dim)
 

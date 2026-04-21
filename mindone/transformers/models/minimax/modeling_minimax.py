@@ -23,7 +23,8 @@ from transformers.utils import auto_docstring, can_return_tuple, logging
 
 import mindspore as ms
 import mindspore.mint.nn.functional as F
-from mindspore import mint, nn
+from mindspore import Parameter, mint, nn
+from mindspore.common.initializer import Normal, initializer
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache
@@ -396,22 +397,57 @@ class MiniMaxAttention(nn.Cell):
         return attn_output, attn_weights
 
 
-class MiniMaxBlockSparseTop2MLP(nn.Cell):
-    def __init__(self, config: MiniMaxConfig):
+class MiniMaxTopKRouter(nn.Cell):
+    def __init__(self, config):
         super().__init__()
-        self.ffn_dim = config.intermediate_size
+        self.top_k = config.num_experts_per_tok
+        self.num_experts = config.num_local_experts
         self.hidden_dim = config.hidden_size
-
-        self.w1 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
-        self.w2 = nn.Linear(self.ffn_dim, self.hidden_dim, bias=False)
-        self.w3 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
-
-        self.act_fn = ACT2FN[config.hidden_act]
+        self.weight = Parameter(mint.empty((self.num_experts, self.hidden_dim)))
 
     def construct(self, hidden_states):
-        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
-        current_hidden_states = self.w2(current_hidden_states)
-        return current_hidden_states
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        router_logits = F.linear(hidden_states, self.weight)
+        router_logits = F.softmax(router_logits.float(), dim=-1)
+        router_top_value, router_indices = mint.topk(router_logits, self.top_k, dim=-1)
+        router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
+        router_scores = router_top_value
+        return router_logits, router_scores, router_indices
+
+
+class MiniMaxExperts(nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config: MiniMaxConfig):
+        super().__init__()
+        self.num_experts = config.num_local_experts
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.intermediate_size
+        self.gate_up_proj = Parameter(mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim)))
+        self.down_proj = Parameter(mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim)))
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        top_k_index: ms.Tensor,
+        top_k_weights: ms.Tensor,
+    ) -> ms.Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = F.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = F.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
 
 
 class MiniMaxSparseMoeBlock(nn.Cell):
@@ -428,55 +464,20 @@ class MiniMaxSparseMoeBlock(nn.Cell):
 
     def __init__(self, config):
         super().__init__()
-        self.hidden_dim = config.hidden_size
-        self.ffn_dim = config.intermediate_size
-        self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
-
-        # gating
-        self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
-
-        self.experts = nn.CellList([MiniMaxBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
-
-        # Jitter parameters
         self.jitter_noise = config.router_jitter_noise
+        self.gate = MiniMaxTopKRouter(config)
+        self.experts = MiniMaxExperts(config)
 
     def construct(self, hidden_states: ms.Tensor) -> tuple[ms.Tensor, ms.Tensor]:
-        """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         if self.training and self.jitter_noise > 0:
             hidden_states *= mint.empty_like(hidden_states).uniform_(1.0 - self.jitter_noise, 1.0 + self.jitter_noise)
         hidden_states = hidden_states.view(-1, hidden_dim)
-        # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states)
-
-        routing_weights = F.softmax(router_logits, dim=1, dtype=ms.float32)
-        routing_weights, selected_experts = mint.topk(routing_weights, self.top_k, dim=-1)
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = mint.zeros((batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype)
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        expert_mask = mint.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        expert_hitted = mint.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-        for expert_idx in expert_hitted:
-            expert_layer = self.experts[expert_idx.item()]
-            idx, top_x = mint.where(expert_mask[expert_idx].squeeze(0))
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support torch tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        return final_hidden_states, router_logits
+        router_logits, top_k_weights, top_k_index = self.gate(hidden_states)
+        hidden_states = self.experts(hidden_states, top_k_index, top_k_weights)
+        hidden_states = hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        return hidden_states, router_logits
 
 
 class MiniMaxDecoderLayer(nn.Cell):
@@ -486,7 +487,6 @@ class MiniMaxDecoderLayer(nn.Cell):
 
         self.self_attn = MiniMaxAttention(config, layer_idx)
 
-        self.block_sparse_moe = MiniMaxSparseMoeBlock(config)
         self.input_layernorm = MiniMaxRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MiniMaxRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -494,6 +494,7 @@ class MiniMaxDecoderLayer(nn.Cell):
         self.layer_type = config.layer_types[layer_idx]
         self.mlp_alpha_factor = config.mlp_alpha_factor
         self.mlp_beta_factor = config.mlp_beta_factor
+        self.mlp = MiniMaxSparseMoeBlock(config)
 
         if self.layer_type == "linear_attention":
             self.self_attn = MiniMaxLightningAttention(config, layer_idx)
@@ -562,7 +563,7 @@ class MiniMaxDecoderLayer(nn.Cell):
         # Fully Connected
         hidden_states = self.post_attention_layernorm(hidden_states)
         residual = hidden_states
-        hidden_states, router_logits = self.block_sparse_moe(hidden_states)
+        hidden_states, router_logits = self.mlp(hidden_states)
         hidden_states = residual * self.mlp_alpha_factor + hidden_states * self.mlp_beta_factor
 
         outputs = (hidden_states,)
@@ -605,6 +606,15 @@ class MiniMaxPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, MiniMaxRMSNorm):
             module.weight.data.fill_(1.0)
+        elif isinstance(module, MiniMaxExperts):
+            module.gate_up_proj.set_data(
+                initializer(Normal(sigma=std, mean=0.0), module.gate_up_proj.shape, module.gate_up_proj.dtype)
+            )
+            module.down_proj.set_data(
+                initializer(Normal(sigma=std, mean=0.0), module.down_proj.shape, module.down_proj.dtype)
+            )
+        elif isinstance(module, MiniMaxTopKRouter):
+            module.weight.set_data(initializer(Normal(sigma=std, mean=0.0), module.weight.shape, module.weight.dtype))
 
 
 class MiniMaxRotaryEmbedding(nn.Cell):

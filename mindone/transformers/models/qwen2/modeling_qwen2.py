@@ -51,6 +51,13 @@ _CHECKPOINT_FOR_DOC = "Qwen/Qwen2-7B-beta"
 _CONFIG_FOR_DOC = "Qwen2Config"
 
 
+def _get_rope_theta(config: Qwen2Config):
+    rope_parameters = getattr(config, "rope_parameters", None)
+    if rope_parameters is not None:
+        return rope_parameters["rope_theta"]
+    return config.rope_theta
+
+
 # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Qwen2
 class Qwen2RMSNorm(nn.Cell):
     def __init__(self, hidden_size, eps=1e-6):
@@ -218,7 +225,7 @@ class Qwen2Attention(nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
+        self.rope_theta = _get_rope_theta(config)
         self.is_causal = True
         self.attention_dropout = config.attention_dropout
 
@@ -366,7 +373,7 @@ class Qwen2MLAAttention(nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
+        self.rope_theta = _get_rope_theta(config)
         self.is_causal = True
         self.attention_dropout = config.attention_dropout
 
@@ -871,7 +878,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 seq_length=config.max_position_embeddings,
                 max_position_embedding=config.max_position_embeddings,
                 rotary_dtype=compute_dtype,
-                theta=config.rope_theta,
+                theta=_get_rope_theta(config),
                 is_dynamic=True if not self.is_first_iteration else False,
             )
 

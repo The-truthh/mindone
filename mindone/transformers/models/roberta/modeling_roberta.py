@@ -673,9 +673,6 @@ class RobertaModel(RobertaPreTrainedModel):
 
         self.pooler = RobertaPooler(config) if add_pooling_layer else None
 
-        self.attn_implementation = config._attn_implementation
-        self.position_embedding_type = config.position_embedding_type
-
         # Initialize weights and apply final processing
         self.post_init()
 

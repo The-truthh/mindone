@@ -752,10 +752,12 @@ class OutputRecorder:
     class_name: Optional[str] = None
 
 
-def check_model_inputs(func):
+def check_model_inputs(func=None, *, tie_last_hidden_states=True):
     """
     Decorator to intercept specific layer outputs without using hooks.
     """
+    if func is None:
+        return lambda func: check_model_inputs(func, tie_last_hidden_states=tie_last_hidden_states)
 
     @wraps(func)
     def wrapper(self, *args, **kwargs):
@@ -886,10 +888,10 @@ def check_model_inputs(func):
         # Inject collected outputs into model output
         for key in collected_outputs:
             if key == "hidden_states":
-                if hasattr(outputs, "vision_hidden_states"):
+                if tie_last_hidden_states and hasattr(outputs, "vision_hidden_states"):
                     collected_outputs[key] = collected_outputs[key][:-1]
                     collected_outputs[key] += (outputs.vision_hidden_states,)
-                elif hasattr(outputs, "last_hidden_state"):
+                elif tie_last_hidden_states and hasattr(outputs, "last_hidden_state"):
                     collected_outputs[key] = collected_outputs[key][:-1]
                     collected_outputs[key] += (outputs.last_hidden_state,)
 

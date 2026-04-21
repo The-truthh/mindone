@@ -134,7 +134,6 @@ class XGLMModelTester:
 
         inputs_dict = {
             "input_ids": input_ids,
-            "head_mask": head_mask,
         }
 
         return config, inputs_dict
@@ -157,7 +156,6 @@ XGLM_CASES = [
         (),
         {
             "input_ids": inputs_dict["input_ids"],
-            "head_mask": inputs_dict["head_mask"],
         },
         {
             "last_hidden_state": 0,

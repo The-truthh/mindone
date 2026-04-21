@@ -134,7 +134,7 @@ def _compute_default_rope_parameters(
         post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
     """
     rope_parameters = _get_rope_parameters(config)
-    base = rope_parameters.get("rope_theta", config.rope_theta)
+    base = rope_parameters.get("rope_theta", getattr(config, "rope_theta", None))
     partial_rotary_factor = rope_parameters.get("partial_rotary_factor", getattr(config, "partial_rotary_factor", 1.0))
     head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
     dim = int(head_dim * partial_rotary_factor)
@@ -225,7 +225,7 @@ def _compute_dynamic_ntk_parameters(
         post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
     """
     rope_parameters = _get_rope_parameters(config)
-    base = rope_parameters.get("rope_theta", config.rope_theta)
+    base = rope_parameters.get("rope_theta", getattr(config, "rope_theta", None))
     partial_rotary_factor = rope_parameters.get("partial_rotary_factor", getattr(config, "partial_rotary_factor", 1.0))
     head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
     dim = int(head_dim * partial_rotary_factor)
@@ -303,7 +303,7 @@ def _compute_yarn_parameters(config: PretrainedConfig, seq_len: Optional[int] = 
     """
 
     rope_parameters = _get_rope_parameters(config)
-    base = rope_parameters.get("rope_theta", config.rope_theta)
+    base = rope_parameters.get("rope_theta", getattr(config, "rope_theta", None))
     partial_rotary_factor = rope_parameters.get("partial_rotary_factor", getattr(config, "partial_rotary_factor", 1.0))
     head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
     dim = int(head_dim * partial_rotary_factor)
@@ -412,7 +412,7 @@ def _compute_longrope_parameters(config: PretrainedConfig, seq_len: Optional[int
         post-processing scaling factor applied to the computed cos/sin.
     """
     rope_parameters = _get_rope_parameters(config)
-    base = rope_parameters.get("rope_theta", config.rope_theta)
+    base = rope_parameters.get("rope_theta", getattr(config, "rope_theta", None))
     partial_rotary_factor = rope_parameters.get("partial_rotary_factor", getattr(config, "partial_rotary_factor", 1.0))
     head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
     dim = int(head_dim * partial_rotary_factor)

@@ -189,8 +189,7 @@ class StableLmAttention(nn.Cell):
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.rope_theta = config.rope_theta
-        self.rotary_ndims = int(self.head_dim * config.partial_rotary_factor)
+        self.rotary_ndims = int(self.head_dim * config.rope_parameters["partial_rotary_factor"])
         self.is_causal = True
 
         if (self.head_dim * self.num_heads) != self.hidden_size:

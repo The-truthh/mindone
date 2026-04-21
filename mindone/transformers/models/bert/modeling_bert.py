@@ -824,7 +824,7 @@ class BertModel(BertPreTrainedModel):
             )
 
         self.attn_implementation = config._attn_implementation
-        self.position_embedding_type = config.position_embedding_type
+        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
 
         self.output_attentions = config.output_attentions
         self.output_hidden_states = config.output_hidden_states

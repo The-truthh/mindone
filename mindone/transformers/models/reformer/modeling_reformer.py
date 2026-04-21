@@ -123,7 +123,7 @@ class AxialPositionEmbeddings(mindspore.nn.Cell):
         self.dropout = config.hidden_dropout_prob
 
         self.least_common_mult_chunk_length = _get_least_common_mult_chunk_len(config)
-        self.weights = mindspore.nn.ParameterList()
+        weights = []
 
         if sum(self.axial_pos_embds_dim) != config.hidden_size:
             raise ValueError(
@@ -139,7 +139,11 @@ class AxialPositionEmbeddings(mindspore.nn.Cell):
             ax_shape = tuple(ax_shape) + (axial_pos_embd_dim,)
 
             # create tensor and init
-            self.weights.append(mindspore.Parameter(mindspore.mint.ones(ax_shape, dtype=mindspore.float32)))
+            weights.append(
+                mindspore.Parameter(mindspore.mint.ones(ax_shape, dtype=mindspore.float32), name=f"weights.{axis}")
+            )
+
+        self.weights = mindspore.ParameterTuple(weights)
 
     def construct(self, position_ids):
         # broadcast weights to correct shape
@@ -842,7 +846,7 @@ class LSHSelfAttention(mindspore.nn.Cell, EfficientAttentionMixin):
             attention_probs = attention_probs * head_mask
 
         # attend values
-        out_vectors = mindspore.mint.matmul(attention_probs, value_vectors)
+        out_vectors = mindspore.mint.matmul(attention_probs.to(value_vectors.dtype), value_vectors)
 
         # free memory
         del value_vectors
@@ -1201,7 +1205,7 @@ class LocalSelfAttention(mindspore.nn.Cell, EfficientAttentionMixin):
             attention_probs = attention_probs * head_mask
 
         # attend values
-        out_vectors = mindspore.mint.matmul(attention_probs, value_vectors)
+        out_vectors = mindspore.mint.matmul(attention_probs.to(value_vectors.dtype), value_vectors)
 
         # free memory
         del value_vectors
@@ -1741,7 +1745,7 @@ class ReformerPreTrainedModel(PreTrainedModel):
         """Initialize the weights"""
         if isinstance(module, AxialPositionEmbeddings):
             for weight in module.weights:
-                nn.init.normal_(weight, std=self.config.axial_norm_std)
+                weight.data.normal_(mean=0.0, std=self.config.axial_norm_std)
         elif isinstance(module, mindspore.mint.nn.Embedding):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:

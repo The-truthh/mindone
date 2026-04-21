@@ -29,7 +29,7 @@ from ...mindspore_utils import ALL_LAYERNORM_LAYERS
 from ...modeling_attn_mask_utils import AttentionMaskConverter, dtype_to_min
 from ...modeling_flash_attention_utils import is_flash_attn_available
 from ...modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from ...modeling_utils import PreTrainedModel
 from ...utils import logging
 
@@ -149,21 +149,19 @@ ALL_LAYERNORM_LAYERS.append(OlmoeRMSNorm)
 class OlmoeRotaryEmbedding(nn.Cell):
     def __init__(self, config: OlmoeConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+
+        self.rope_type = self.config.rope_parameters["rope_type"]
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
         self.inv_freq = ms.Parameter(inv_freq, requires_grad=False, name="inv_freq")
         self.original_inv_freq = self.inv_freq
 
+    @dynamic_rope_update
     def construct(self, x, position_ids):
         inv_freq_expanded = self.inv_freq[None, :, None].float().broadcast_to((position_ids.shape[0], -1, 1))
         position_ids_expanded = position_ids[:, None, :].float()
@@ -263,7 +261,6 @@ class OlmoeAttention(nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
         self.is_causal = True
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
@@ -455,49 +452,75 @@ OLMOE_ATTENTION_CLASSES = {
 }
 
 
+class OlmoeExperts(nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config: OlmoeConfig):
+        super().__init__()
+        self.num_experts = getattr(config, "num_local_experts", config.num_experts)
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.intermediate_size
+        self.gate_up_proj = ms.Parameter(mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim)))
+        self.down_proj = ms.Parameter(mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim)))
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        top_k_index: ms.Tensor,
+        top_k_weights: ms.Tensor,
+    ) -> ms.Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
+class OlmoeTopKRouter(nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.top_k = config.num_experts_per_tok
+        self.num_experts = config.num_experts
+        self.norm_topk_prob = config.norm_topk_prob
+        self.hidden_dim = config.hidden_size
+        self.weight = ms.Parameter(mint.zeros((self.num_experts, self.hidden_dim)))
+
+    def construct(self, hidden_states):
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        router_logits = mint.nn.functional.linear(hidden_states, self.weight)
+        router_logits = mint.nn.functional.softmax(router_logits, dtype=ms.float32, dim=-1)
+        router_top_value, router_indices = mint.topk(router_logits, self.top_k, dim=-1)
+        if self.norm_topk_prob:
+            router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
+        router_top_value = router_top_value.to(router_logits.dtype)
+        router_scores = router_top_value
+        return router_logits, router_scores, router_indices
+
+
 class OlmoeSparseMoeBlock(nn.Cell):
     def __init__(self, config):
         super().__init__()
-        self.num_experts = config.num_experts
-        self.top_k = config.num_experts_per_tok
-        self.norm_topk_prob = config.norm_topk_prob
-        self.gate = mint.nn.Linear(config.hidden_size, self.num_experts, bias=False)
-        self.experts = nn.CellList([OlmoeMLP(config) for _ in range(self.num_experts)])
+        self.gate = OlmoeTopKRouter(config)
+        self.experts = OlmoeExperts(config)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states)
-
-        routing_weights = mint.nn.functional.softmax(router_logits, dim=1, dtype=ms.float32)
-        routing_weights, selected_experts = mint.topk(routing_weights, self.top_k, dim=-1)
-        if self.norm_topk_prob:
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = mint.zeros((batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype)
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be selected
-        expert_mask = mint.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        # Loop over all available experts in the model and perform the computation on each expert
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.experts[expert_idx]
-            idx, top_x = mint.where(expert_mask[expert_idx])
-
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support mindspore tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        router_logits, top_k_weights, top_k_index = self.gate(hidden_states)
+        final_hidden_states = self.experts(hidden_states, top_k_index, top_k_weights).reshape(
+            batch_size, sequence_length, hidden_dim
+        )
         return final_hidden_states, router_logits
 
 

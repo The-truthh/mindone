@@ -99,13 +99,13 @@ class Qwen3VLMoeTextExperts(nn.Cell):
         self.expert_dim = self.intermediate_size
         self.gate_up_proj = Parameter(
             ms.tensor(
-                np.ones((self.num_experts, self.hidden_size, 2 * self.expert_dim)),
+                np.ones((self.num_experts, 2 * self.expert_dim, self.hidden_size)),
                 dtype=config.dtype if config.dtype else ms.float32,
             )
         )
         self.down_proj = Parameter(
             ms.tensor(
-                np.ones((self.num_experts, self.expert_dim, self.hidden_size)),
+                np.ones((self.num_experts, self.hidden_size, self.expert_dim)),
                 dtype=config.dtype if config.dtype else ms.float32,
             )
         )
@@ -127,34 +127,19 @@ class Qwen3VLMoeTextExperts(nn.Cell):
         """
         batch_size = hidden_states.shape[0]
         hidden_states = hidden_states.reshape(-1, self.hidden_size)  # (num_tokens, hidden_size)
-        if self.training:
-            next_states = mint.zeros_like(hidden_states, dtype=hidden_states.dtype)
-            with ms._no_grad():
-                expert_mask = mint.nn.functional.one_hot(router_indices, num_classes=self.num_experts)
-                expert_mask = expert_mask.permute(2, 1, 0)
-                # we sum on the top_k and on the sequence length to get which experts
-                # are hit this time around
-                expert_hit = mint.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-            for expert_idx in expert_hit[:]:
-                with ms._no_grad():
-                    _, token_idx = mint.where(expert_mask[expert_idx[0]])
-                current_state = hidden_states[token_idx]
-                gate_up = current_state @ self.gate_up_proj[expert_idx]
-                gate, up = gate_up.chunk(2, dim=-1)
-                gated_output = up * self.act_fn(gate)
-                out = gated_output @ self.down_proj[expert_idx]
-                weighted_output = out[0] * routing_weights[token_idx, expert_idx, None]
-                next_states.index_add_(0, token_idx, weighted_output.to(hidden_states.dtype))
-            next_states = next_states.view(batch_size, -1, self.hidden_size)
-        else:
-            hidden_states = hidden_states.repeat(self.num_experts, 1)
-            hidden_states = hidden_states.view(self.num_experts, -1, self.hidden_size)
-            gate_up = mint.bmm(hidden_states, self.gate_up_proj)
-            gate, up = gate_up.chunk(2, dim=-1)  # not supported for DTensors
-            next_states = mint.bmm((up * self.act_fn(gate)), self.down_proj)
-            next_states = next_states.reshape(self.num_experts, batch_size, -1, self.hidden_size)
-            next_states = next_states * routing_weights.swapaxes(0, 1).view(self.num_experts, batch_size, -1)[..., None]
-            next_states = next_states.sum(dim=0)
+        next_states = mint.zeros_like(hidden_states, dtype=hidden_states.dtype)
+        expert_mask = mint.nn.functional.one_hot(router_indices, num_classes=self.num_experts).permute(2, 1, 0)
+        for expert_idx in range(self.num_experts):
+            _, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * routing_weights[token_idx, expert_idx, None]
+            next_states.index_add_(0, token_idx, current_hidden_states.to(hidden_states.dtype))
+        next_states = next_states.view(batch_size, -1, self.hidden_size)
         return next_states
 
 
@@ -440,7 +425,16 @@ class Qwen3VLMoePreTrainedModel(PreTrainedModel):
     def _init_weights(self, module):
         """Initialize the weights."""
         super()._init_weights(module)
-        pass
+        if hasattr(self.config, "initializer_range"):
+            std = self.config.initializer_range
+        else:
+            std = getattr(self.config.get_text_config(), "initializer_range", 0.02)
+        if isinstance(module, Qwen3VLMoeTextExperts):
+            module.gate_up_proj.data.normal_(mean=0.0, std=std)
+            module.down_proj.data.normal_(mean=0.0, std=std)
+        elif isinstance(module, Qwen3VLMoeVisionRotaryEmbedding):
+            inv_freq = 1.0 / (module.theta ** (mint.arange(0, module.dim, 2, dtype=ms.float32) / module.dim))
+            module.inv_freq.data.copy_(inv_freq)
 
 
 class Qwen3VLMoeVisionMLP(nn.Cell):
@@ -483,6 +477,8 @@ class Qwen3VLMoeVisionRotaryEmbedding(nn.Cell):
 
     def __init__(self, dim: int, theta: float = 10000.0) -> None:
         super().__init__()
+        self.dim = dim
+        self.theta = theta
         inv_freq = 1.0 / (theta ** (mint.arange(0, dim, 2, dtype=ms.float32) / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
@@ -1417,7 +1413,7 @@ class Qwen3VLMoeCausalLMOutputWithPast(ModelOutput):
 
 class Qwen3VLMoeForConditionalGeneration(Qwen3VLMoePreTrainedModel, GenerationMixin):
     _checkpoint_conversion_mapping = {}
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
     # Reference: fix gemma3 grad acc #37208
     accepts_loss_kwargs = False
     config: Qwen3VLMoeConfig

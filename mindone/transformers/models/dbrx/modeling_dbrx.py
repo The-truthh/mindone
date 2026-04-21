@@ -271,7 +271,10 @@ class DbrxAttention(nn.Cell):
         self.clip_qkv = attn_config.clip_qkv
         self.num_key_value_heads = attn_config.kv_n_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.rope_theta = attn_config.rope_theta
+        self.rope_theta = getattr(attn_config, "rope_theta", None)
+        rope_parameters = getattr(config, "rope_parameters", None)
+        if rope_parameters is not None:
+            self.rope_theta = rope_parameters.get("rope_theta", self.rope_theta)
         self.is_causal = True
 
         self.Wqkv = mint.nn.Linear(
@@ -671,11 +674,11 @@ class DbrxExpertGLU(nn.Cell):
         self.activation_fn = ACT2FN[act_fn_name]
 
     def construct(self, x: ms.Tensor, expert_w1: ms.Tensor, expert_v1: ms.Tensor, expert_w2: ms.Tensor) -> ms.Tensor:
-        gate_proj = x.matmul(expert_w1.t())
-        up_proj = x.matmul(expert_v1.t())
+        gate_proj = x.matmul(expert_w1)
+        up_proj = x.matmul(expert_v1)
         gate_proj = self.activation_fn(gate_proj)
         intermediate_states = gate_proj * up_proj
-        down_proj = intermediate_states.matmul(expert_w2)
+        down_proj = intermediate_states.matmul(expert_w2.t())
         return down_proj
 
 
@@ -735,7 +738,7 @@ class DbrxFFN(nn.Cell):
 
         ffn_config = config.ffn_config
         self.router = DbrxRouter(
-            hidden_size=config.d_model,
+            hidden_size=ffn_config.hidden_size,
             moe_num_experts=ffn_config.moe_num_experts,
             moe_top_k=ffn_config.moe_top_k,
             moe_jitter_eps=ffn_config.moe_jitter_eps,
@@ -743,7 +746,7 @@ class DbrxFFN(nn.Cell):
         )
 
         self.experts = DbrxExperts(
-            hidden_size=config.d_model,
+            hidden_size=ffn_config.hidden_size,
             ffn_hidden_size=ffn_config.ffn_hidden_size,
             moe_num_experts=ffn_config.moe_num_experts,
             ffn_act_fn=ffn_config.ffn_act_fn,

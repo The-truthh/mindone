@@ -33,7 +33,7 @@ from ...mindspore_adapter import dtype_to_min
 from ...mindspore_utils import ALL_LAYERNORM_LAYERS
 from ...modeling_attn_mask_utils import AttentionMaskConverter
 from ...modeling_outputs import BaseModelOutputWithPast, MoeCausalLMOutputWithPast, MoeModelOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, _get_rope_type
 from ...modeling_utils import PreTrainedModel
 
 logger = logging.get_logger(__name__)
@@ -149,11 +149,7 @@ ALL_LAYERNORM_LAYERS.append(GraniteMoeRMSNorm)
 class GraniteMoeRotaryEmbedding(nn.Cell):
     def __init__(self, config: GraniteMoeConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        self.rope_type = _get_rope_type(config)
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
@@ -880,7 +876,6 @@ class GraniteMoeModel(GraniteMoePreTrainedModel):
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
 
         # rope
         self.rotary_emb = GraniteMoeRotaryEmbedding(config)

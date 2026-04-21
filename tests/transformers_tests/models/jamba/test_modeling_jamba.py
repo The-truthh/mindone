@@ -69,10 +69,10 @@ class JambaModelTester:
         attention_dropout=0.0,
         num_experts_per_tok=2,
         num_experts=4,
-        expert_layer_period=2,
-        expert_layer_offset=1,
+        expert_layer_period=8,
+        expert_layer_offset=4,
         attn_layer_period=8,
-        attn_layer_offset=4,
+        attn_layer_offset=1,
         use_mamba_kernels=False,  # Disable for testing
         mamba_d_state=16,
         mamba_d_conv=4,

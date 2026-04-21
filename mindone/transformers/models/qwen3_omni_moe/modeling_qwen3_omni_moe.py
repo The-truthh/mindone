@@ -707,16 +707,19 @@ class Qwen3OmniMoeAudioEncoder(Qwen3OmniMoePreTrainedModel):
         aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
         chunk_num = mint.ceil(feature_lens / (self.n_window * 2)).long()
 
-        chunk_lengths = ms.tensor(
-            [self.n_window * 2] * chunk_num.sum(),
-            dtype=ms.int64,
-        )
+        num_chunks = int(chunk_num.sum().item())
+        chunk_lengths = mint.full((num_chunks,), self.n_window * 2, dtype=ms.int64)
         tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
         chunk_lengths[tail_chunk_index] = feature_lens % (self.n_window * 2)
         chunk_lengths[chunk_lengths == 0] = self.n_window * 2
 
         # TODO mindspore do not support "split_size=list[int]"
-        chunk_list = input_features.T.split(chunk_lengths.item(), dim=0)
+        chunk_list = []
+        chunk_start = 0
+        for chunk_length in chunk_lengths:
+            chunk_length = int(chunk_length.item())
+            chunk_list.append(input_features.T[chunk_start : chunk_start + chunk_length])
+            chunk_start += chunk_length
         # TODO mindspore do not support "nn.utils.rnn.pad_sequence", we use "pad+stack" for substitution
         # padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
         max_length = max([i.shape[0] for i in chunk_list])
@@ -730,8 +733,14 @@ class Qwen3OmniMoeAudioEncoder(Qwen3OmniMoePreTrainedModel):
         #     [mint.ones(length, dtype=ms.bool_) for length in feature_lens_after_cnn],
         #     batch_first=True,
         # )
-        max_length = max(feature_lens_after_cnn)
-        mask_list = [mint.ones(max_length, dtype=ms.bool_) for _ in feature_lens_after_cnn]
+        max_length = int(feature_lens_after_cnn.max().item())
+        mask_list = []
+        for length in feature_lens_after_cnn:
+            length = int(length.item())
+            mask = mint.ones(max_length, dtype=ms.bool_)
+            if length < max_length:
+                mask[length:] = False
+            mask_list.append(mask)
         padded_mask_after_cnn = mint.stack(mask_list)
         padded_feature = padded_feature.unsqueeze(1)
         # Split to chunk to avoid OOM during convolution
@@ -1294,59 +1303,76 @@ class Qwen3OmniMoeThinkerTextMLP(nn.Cell):
         return down_proj
 
 
+class Qwen3OmniMoeThinkerTextExperts(nn.Cell):
+    """
+    ModuleList of experts.
+    """
+
+    def __init__(self, config: Qwen3OmniMoeThinkerConfig):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.moe_intermediate_size
+        self.gate_up_proj = Parameter(mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim)))
+        self.down_proj = Parameter(mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim)))
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        top_k_index: ms.Tensor,
+        top_k_weights: ms.Tensor,
+    ) -> ms.Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
+class Qwen3OmniMoeThinkerTextTopKRouter(nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.top_k = config.num_experts_per_tok
+        self.num_experts = config.num_experts
+        self.norm_topk_prob = config.norm_topk_prob
+        self.hidden_dim = config.hidden_size
+        self.weight = Parameter(mint.zeros((self.num_experts, self.hidden_dim)))
+
+    def construct(self, hidden_states):
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        router_logits = mint.nn.functional.linear(hidden_states, self.weight)
+        router_logits = mint.nn.functional.softmax(router_logits, dtype=ms.float32, dim=-1)
+        router_top_value, router_indices = mint.topk(router_logits, self.top_k, dim=-1)
+        if self.norm_topk_prob:
+            router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
+        router_top_value = router_top_value.to(router_logits.dtype)
+        router_scores = router_top_value
+        return router_logits, router_scores, router_indices
+
+
 class Qwen3OmniMoeThinkerTextSparseMoeBlock(nn.Cell):
     def __init__(self, config):
         super().__init__()
-        self.num_experts = config.num_experts
-        self.top_k = config.num_experts_per_tok
-        self.norm_topk_prob = config.norm_topk_prob
-
-        # gating
-        self.gate = mint.nn.Linear(config.hidden_size, config.num_experts, bias=False)
-        self.experts = nn.CellList(
-            [
-                Qwen3OmniMoeThinkerTextMLP(config, intermediate_size=config.moe_intermediate_size)
-                for _ in range(self.num_experts)
-            ]
-        )
+        self.experts = Qwen3OmniMoeThinkerTextExperts(config)
+        self.gate = Qwen3OmniMoeThinkerTextTopKRouter(config)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
-        """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states)
-
-        routing_weights = F.softmax(router_logits, dim=1, dtype=ms.float32)
-        routing_weights, selected_experts = mint.topk(routing_weights, self.top_k, dim=-1)
-        if self.norm_topk_prob:  # only diff with mixtral sparse moe block!
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = mint.zeros((batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype)
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        expert_mask = mint.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        # Loop over all available experts in the model and perform the computation on each expert
-        expert_hit = mint.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-        for expert_idx in expert_hit:
-            expert_layer = self.experts[expert_idx.item()]
-            idx, top_x = mint.where(expert_mask[expert_idx].squeeze(0))
-
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support torch tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        return final_hidden_states, router_logits
+        hidden_states_reshaped = hidden_states.view(-1, hidden_dim)
+        router_logits, routing_weights, selected_experts = self.gate(hidden_states_reshaped)
+        final_hidden_states = self.experts(hidden_states_reshaped, selected_experts, routing_weights)
+        return final_hidden_states.reshape(batch_size, sequence_length, hidden_dim), router_logits
 
 
 class Qwen3OmniMoeThinkerTextRMSNorm(nn.Cell):
@@ -1571,6 +1597,22 @@ class Qwen3OmniMoeThinkerTextPreTrainedModel(PreTrainedModel):
         "attentions": Qwen3OmniMoeThinkerTextAttention,
     }
     config_class = Qwen3OmniMoeTextConfig
+
+    def _init_weights(self, module):
+        std = self.config.initializer_range
+        if isinstance(module, Qwen3OmniMoeThinkerTextExperts):
+            module.gate_up_proj.data.normal_(mean=0.0, std=std)
+            module.down_proj.data.normal_(mean=0.0, std=std)
+        elif isinstance(module, Qwen3OmniMoeThinkerTextTopKRouter):
+            module.weight.data.normal_(mean=0.0, std=std)
+        elif isinstance(module, mint.nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, mint.nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
 
 
 class Qwen3OmniMoeTextRMSNorm(nn.Cell):
@@ -1832,7 +1874,7 @@ def load_balancing_loss_func(
 class Qwen3OmniMoeThinkerForConditionalGeneration(Qwen3OmniMoePreTrainedModelForConditionalGeneration, GenerationMixin):
     config: Qwen3OmniMoeThinkerConfig
     base_model_prefix = "thinker"
-    _tied_weights_keys = ["model.embed_tokens.weight", "lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
     _no_split_modules = [
         "Qwen3OmniMoeAudioEncoderLayer",
         "Qwen3OmniMoeThinkerTextDecoderLayer",
@@ -1850,11 +1892,11 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(Qwen3OmniMoePreTrainedModelFor
         self.vocab_size = config.text_config.vocab_size
         self.model = Qwen3OmniMoeThinkerTextModel._from_config(config.text_config)
         self.lm_head = mint.nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.spatial_merge_size = config.vision_config.spatial_merge_size
         self.rope_deltas = None
         self.num_experts = config.text_config.num_experts
         self.num_experts_per_tok = config.text_config.num_experts_per_tok
+        self.router_aux_loss_coef = config.text_config.router_aux_loss_coef
         self.post_init()
 
     def get_input_embeddings(self):

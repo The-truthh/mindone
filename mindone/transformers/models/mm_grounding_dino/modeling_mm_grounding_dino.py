@@ -1857,47 +1857,42 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: ms.Tensor) ->
         - **attention_mask** (ms.Tensor of shape `(batch_size, sequence_length, sequence_length)`)
         - **position_ids** (ms.Tensor of shape `(batch_size, sequence_length)`)
     """
-    batch_size, num_token = input_ids.shape
-    # special_tokens_mask: batch_size, num_token. 1 for special tokens. 0 for normal tokens
-    special_tokens_mask = mint.zeros(
-        (batch_size, num_token),
-    ).bool()
-    for special_token in SPECIAL_TOKENS:
-        special_tokens_mask = mint.logical_or(special_tokens_mask, input_ids == special_token)
+    batch_size, seq_len = input_ids.shape
 
-    # idxs: each row is a list of indices of special tokens
-    idxs = mint.nonzero(special_tokens_mask)
+    attention_mask = mint.eye(seq_len).bool().unsqueeze(0).repeat(batch_size, 1, 1)
+    position_ids = mint.zeros((batch_size, seq_len), dtype=ms.int64)
 
-    # generate attention mask and positional ids
-    attention_mask = (
-        mint.eye(
-            num_token,
-        )
-        .bool()
-        .unsqueeze(0)
-        .repeat(batch_size, 1, 1)
-    )
-    position_ids = mint.zeros(
-        (batch_size, num_token),
-    )
-    previous_col = 0
-    for i in range(idxs.shape[0]):
-        row, col = idxs[i]
-        row = int(row)
-        col = int(col)
-        if (col == 0) or (col == num_token - 1):
-            attention_mask[row, col, col] = True
-            position_ids[row, col] = 0
-        else:
-            attention_mask[row, previous_col + 1 : col + 1, previous_col + 1 : col + 1] = True
-            position_ids[row, previous_col + 1 : col + 1] = mint.arange(
-                0,
-                col - previous_col,
-            )
+    for row in range(batch_size):
+        special_positions = [
+            col for col in range(seq_len) if int(input_ids[row, col]) in SPECIAL_TOKENS
+        ]
+        next_special = []
+        prev_special = []
+        for col in range(seq_len):
+            previous = -1
+            following = seq_len
+            for special_position in special_positions:
+                if special_position <= col:
+                    previous = special_position
+                if special_position >= col:
+                    following = special_position
+                    break
+            prev_special.append(previous)
+            next_special.append(following)
 
-        previous_col = col
+        valid_block = [
+            following not in (0, seq_len - 1, seq_len)
+            for following in next_special
+        ]
+        for col in range(seq_len):
+            if valid_block[col]:
+                position_ids[row, col] = max(col - prev_special[col] - 1, 0)
+        for query_idx in range(seq_len):
+            for key_idx in range(seq_len):
+                if next_special[query_idx] == next_special[key_idx] and valid_block[key_idx]:
+                    attention_mask[row, query_idx, key_idx] = True
 
-    return attention_mask, position_ids.to(ms.int64)
+    return attention_mask, position_ids
 
 
 class MMGroundingDinoModel(MMGroundingDinoPreTrainedModel):

@@ -91,7 +91,7 @@ class GraniteSpeechForConditionalGenerationModelTester:
             "vocab_size": 30522,
         },
         audio_token_index=0,
-        tie_word_embeddings=True,
+        tie_word_embeddings=False,
         initializer_range=0.02,
         has_lora_adapter=True,
         downsample_rate=5,
@@ -122,7 +122,7 @@ class GraniteSpeechForConditionalGenerationModelTester:
         self.seq_length = seq_length + self.num_audio_tokens
 
     def get_config(self):
-        return GraniteSpeechConfig(
+        config = GraniteSpeechConfig(
             encoder_config=self.encoder_config,
             text_config=self.text_config,
             projector_config=self.projector_config,
@@ -131,6 +131,8 @@ class GraniteSpeechForConditionalGenerationModelTester:
             initializer_range=self.initializer_range,
             has_lora_adapter=self.has_lora_adapater,
         )
+        config.text_config._attn_implementation = "eager"
+        return config
 
     def prepare_config_and_inputs(self):
         input_features = floats_numpy(

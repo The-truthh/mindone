@@ -1230,7 +1230,10 @@ class MBartDecoder(MBartPreTrainedModel):
 
 
 class MBartModel(MBartPreTrainedModel):
-    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight"]
+    _tied_weights_keys = {
+        "decoder.embed_tokens.weight": "shared.weight",
+        "encoder.embed_tokens.weight": "shared.weight",
+    }
 
     def __init__(self, config: MBartConfig):
         super().__init__(config)
@@ -1347,7 +1350,7 @@ class MBartForConditionalGeneration(MBartPreTrainedModel, GenerationMixin):
     _supports_dynamic_input = True
     base_model_prefix = "model"
     _keys_to_ignore_on_load_missing = ["final_logits_bias"]
-    _tied_weights_keys = ["model.encoder.embed_tokens.weight", "model.decoder.embed_tokens.weight", "lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.shared.weight"}
 
     def __init__(self, config: MBartConfig):
         super().__init__(config)
@@ -1480,8 +1483,6 @@ class MBartForConditionalGeneration(MBartPreTrainedModel, GenerationMixin):
 
 
 class MBartForSequenceClassification(MBartPreTrainedModel):
-    _tied_weights_keys = ["model.encoder.embed_tokens.weight", "model.decoder.embed_tokens.weight"]
-
     def __init__(self, config: MBartConfig, **kwargs):
         super().__init__(config, **kwargs)
         self.model = MBartModel(config)
@@ -1597,8 +1598,6 @@ class MBartForSequenceClassification(MBartPreTrainedModel):
 
 
 class MBartForQuestionAnswering(MBartPreTrainedModel):
-    _tied_weights_keys = ["model.encoder.embed_tokens.weight", "model.decoder.embed_tokens.weight"]
-
     def __init__(self, config):
         super().__init__(config)
 

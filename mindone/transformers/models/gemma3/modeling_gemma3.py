@@ -141,17 +141,15 @@ class Gemma3RMSNorm(nn.Cell):
 
 
 class Gemma3RotaryEmbedding(nn.Cell):
-    def __init__(self, config: Gemma3TextConfig):
+    def __init__(self, config: Gemma3TextConfig, layer_type: str = "full_attention"):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        rope_parameters = config.rope_parameters[layer_type]
+        self.rope_type = rope_parameters["rope_type"]
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
-        self.config = config
+        self.config = copy.deepcopy(config)
+        self.config.rope_parameters = rope_parameters
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
@@ -461,15 +459,10 @@ class Gemma3TextModel(Gemma3PreTrainedModel):
             [Gemma3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = Gemma3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.rotary_emb = Gemma3RotaryEmbedding(config=config)
+        self.rotary_emb = Gemma3RotaryEmbedding(config=config, layer_type="full_attention")
         self.gradient_checkpointing = False
 
-        # TODO: raushan fix this after RoPE refactor. For now we hack it by reassigning thetas
-        # when we want to create a local RoPE layer. Config defaults should hold values for global RoPE
-        config = copy.deepcopy(config)
-        config.rope_theta = config.rope_local_base_freq
-        config.rope_scaling = {"rope_type": "default"}
-        self.rotary_emb_local = Gemma3RotaryEmbedding(config=config)
+        self.rotary_emb_local = Gemma3RotaryEmbedding(config=config, layer_type="sliding_attention")
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -767,7 +760,6 @@ class Gemma3Model(Gemma3PreTrainedModel):
         language_model = AutoModel.from_config(config=config.text_config)
         self.language_model = language_model
 
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.post_init()
 
     def get_input_embeddings(self):

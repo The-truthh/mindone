@@ -809,7 +809,6 @@ class CamembertLMHead(nn.Cell):
 
         self.decoder = mint.nn.Linear(config.hidden_size, config.vocab_size)
         self.bias = ms.Parameter(mint.zeros(config.vocab_size))
-        self.decoder.bias = self.bias
 
     def construct(self, features, **kwargs):
         x = self.dense(features)
@@ -820,11 +819,6 @@ class CamembertLMHead(nn.Cell):
         x = self.decoder(x)
 
         return x
-
-    def _tie_weights(self):
-        # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
-        # For accelerate compatibility and to not break backward compatibility
-        self.decoder.bias = self.bias
 
 
 @add_start_docstrings(
@@ -860,7 +854,7 @@ class CamembertModel(CamembertPreTrainedModel):
         self.pooler = CamembertPooler(config) if add_pooling_layer else None
 
         self.attn_implementation = config._attn_implementation
-        self.position_embedding_type = config.position_embedding_type
+        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1055,7 +1049,10 @@ class CamembertModel(CamembertPreTrainedModel):
 )
 # Copied from transformers.models.roberta.modeling_roberta.RobertaForMaskedLM with Roberta->Camembert, ROBERTA->CAMEMBERT
 class CamembertForMaskedLM(CamembertPreTrainedModel):
-    _tied_weights_keys = ["lm_head.decoder.weight", "lm_head.decoder.bias"]
+    _tied_weights_keys = {
+        "lm_head.decoder.weight": "roberta.embeddings.word_embeddings.weight",
+        "lm_head.decoder.bias": "lm_head.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -1077,6 +1074,9 @@ class CamembertForMaskedLM(CamembertPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head.decoder = new_embeddings
+
+    def tie_weights(self):
+        pass
 
     @add_start_docstrings_to_model_forward(CAMEMBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
@@ -1528,7 +1528,10 @@ class CamembertForQuestionAnswering(CamembertPreTrainedModel):
 # Copied from transformers.models.roberta.modeling_roberta.RobertaForCausalLM with Roberta->Camembert, ROBERTA->CAMEMBERT,
 # FacebookAI/roberta-base->almanach/camembert-base
 class CamembertForCausalLM(CamembertPreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.decoder.weight", "lm_head.decoder.bias"]
+    _tied_weights_keys = {
+        "lm_head.decoder.weight": "camembert.embeddings.word_embeddings.weight",
+        "lm_head.decoder.bias": "lm_head.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -1547,6 +1550,9 @@ class CamembertForCausalLM(CamembertPreTrainedModel, GenerationMixin):
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head.decoder = new_embeddings
+
+    def tie_weights(self):
+        pass
 
     @add_start_docstrings_to_model_forward(CAMEMBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)

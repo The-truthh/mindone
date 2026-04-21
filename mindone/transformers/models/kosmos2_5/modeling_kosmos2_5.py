@@ -1513,7 +1513,7 @@ class Kosmos2_5Model(Kosmos2_5PreTrainedModel):
 )
 class Kosmos2_5TextForCausalLM(Kosmos2_5PreTrainedModel):
     config_class = Kosmos2_5TextConfig
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config: Kosmos2_5TextConfig):
         super().__init__(config)
@@ -1525,6 +1525,9 @@ class Kosmos2_5TextForCausalLM(Kosmos2_5PreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    def tie_weights(self):
+        pass
 
     def get_input_embeddings(self) -> mindspore.nn.Cell:
         return self.model.embed_tokens
@@ -1675,7 +1678,6 @@ class Kosmos2_5TextForCausalLM(Kosmos2_5PreTrainedModel):
 )
 class Kosmos2_5ForConditionalGeneration(Kosmos2_5PreTrainedModel, GenerationMixin):
     config_class = Kosmos2_5Config
-    _tied_weights_keys = ["text_model.lm_head.weight"]
 
     def __init__(self, config: Kosmos2_5Config):
         super().__init__(config)
@@ -1684,6 +1686,9 @@ class Kosmos2_5ForConditionalGeneration(Kosmos2_5PreTrainedModel, GenerationMixi
         self.image_to_text_projection = Kosmos2_5ImageToTextProjection(config)
         # Initialize weights and apply final processing
         self.post_init()
+
+    def tie_weights(self):
+        pass
 
     def get_input_embeddings(self) -> mindspore.nn.Cell:
         return self.text_model.model.embed_tokens

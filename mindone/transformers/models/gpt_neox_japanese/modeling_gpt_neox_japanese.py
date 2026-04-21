@@ -34,6 +34,22 @@ from ...utils import logging
 logger = logging.get_logger(__name__)
 
 
+def _get_rope_parameters(config: GPTNeoXJapaneseConfig):
+    rope_parameters = getattr(config, "rope_parameters", None)
+    if rope_parameters is not None:
+        return rope_parameters
+
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if rope_scaling is not None:
+        return rope_scaling
+
+    return {
+        "rope_theta": getattr(config, "rotary_emb_base", 10000),
+        "partial_rotary_factor": getattr(config, "rotary_pct", 1.0),
+        "rope_type": "default",
+    }
+
+
 class GPTNeoXJapanesePreTrainedModel(PreTrainedModel):
     config_class = GPTNeoXJapaneseConfig
     base_model_prefix = "gpt_neox_japanese"
@@ -75,8 +91,9 @@ class GPTNeoXJapaneseAttention(nn.Cell):
             )
 
         self.layer_idx = layer_idx
-        self.rotary_ndims = int(self.head_size * config.rotary_pct)
-        self.rope_theta = config.rotary_emb_base
+        rope_parameters = _get_rope_parameters(config)
+        self.rotary_ndims = int(self.head_size * rope_parameters.get("partial_rotary_factor", 1.0))
+        self.rope_theta = rope_parameters["rope_theta"]
         self.rotary_emb = GPTNeoXJapaneseRotaryEmbedding(config=config)
         self.attention_dropout = mint.nn.Dropout(config.attention_dropout)
         self.norm_factor = math.sqrt(self.head_size)
@@ -216,11 +233,8 @@ class GPTNeoXJapaneseAttention(nn.Cell):
 class GPTNeoXJapaneseRotaryEmbedding(nn.Cell):
     def __init__(self, config: GPTNeoXJapaneseConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        rope_parameters = _get_rope_parameters(config)
+        self.rope_type = rope_parameters.get("rope_type", rope_parameters.get("type", "default"))
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 

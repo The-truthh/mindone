@@ -761,7 +761,7 @@ class AlignTextSelfAttention(ms.nn.Cell):
                 2 * config.max_position_embeddings - 1, self.attention_head_size
             )
 
-        self.is_decoder = config.is_decoder
+        self.is_decoder = getattr(config, "is_decoder", False)
 
     def transpose_for_scores(self, x: ms.Tensor) -> ms.Tensor:
         new_x_shape = x.shape[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -987,8 +987,8 @@ class AlignTextLayer(ms.nn.Cell):
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = AlignTextAttention(config)
-        self.is_decoder = config.is_decoder
-        self.add_cross_attention = config.add_cross_attention
+        self.is_decoder = getattr(config, "is_decoder", False)
+        self.add_cross_attention = getattr(config, "add_cross_attention", False)
         if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")

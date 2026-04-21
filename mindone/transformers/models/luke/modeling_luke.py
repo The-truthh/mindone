@@ -1253,7 +1253,6 @@ class LukeLMHead(mindspore.nn.Cell):
 
         self.decoder = mindspore.mint.nn.Linear(config.hidden_size, config.vocab_size)
         self.bias = mindspore.Parameter(mindspore.mint.zeros(config.vocab_size))
-        self.decoder.bias = self.bias
         self.gelu = get_activation("gelu")
 
     def construct(self, features, **kwargs):
@@ -1266,11 +1265,6 @@ class LukeLMHead(mindspore.nn.Cell):
 
         return x
 
-    def _tie_weights(self):
-        # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
-        # For accelerate compatibility and to not break backward compatibility
-        self.decoder.bias = self.bias
-
 
 @add_start_docstrings(
     """
@@ -1280,7 +1274,10 @@ class LukeLMHead(mindspore.nn.Cell):
     LUKE_START_DOCSTRING,
 )
 class LukeForMaskedLM(LukePreTrainedModel):
-    _tied_weights_keys = ["lm_head.decoder.weight", "lm_head.decoder.bias", "entity_predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "entity_predictions.decoder.weight": "luke.entity_embeddings.entity_embeddings.weight",
+        "lm_head.bias": "lm_head.decoder.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -1296,8 +1293,7 @@ class LukeForMaskedLM(LukePreTrainedModel):
         self.post_init()
 
     def tie_weights(self):
-        super().tie_weights()
-        self._tie_or_clone_weights(self.entity_predictions.decoder, self.luke.entity_embeddings.entity_embeddings)
+        pass
 
     def get_output_embeddings(self):
         return self.lm_head.decoder

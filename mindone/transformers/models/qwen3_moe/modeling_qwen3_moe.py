@@ -228,60 +228,80 @@ class Qwen3MoeMLP(mindspore.nn.Cell):
         return down_proj
 
 
-class Qwen3MoeSparseMoeBlock(mindspore.nn.Cell):
+class Qwen3MoeExperts(mindspore.nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
     def __init__(self, config):
         super().__init__()
         self.num_experts = config.num_experts
-        self.top_k = config.num_experts_per_tok
-        self.norm_topk_prob = config.norm_topk_prob
-
-        # gating
-        self.gate = mindspore.mint.nn.Linear(config.hidden_size, config.num_experts, bias=False)
-        self.experts = mindspore.nn.CellList(
-            [Qwen3MoeMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(self.num_experts)]
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.moe_intermediate_size
+        self.gate_up_proj = mindspore.Parameter(
+            mindspore.mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim))
         )
+        self.down_proj = mindspore.Parameter(
+            mindspore.mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim))
+        )
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: mindspore.Tensor,
+        top_k_index: mindspore.Tensor,
+        top_k_weights: mindspore.Tensor,
+    ) -> mindspore.Tensor:
+        final_hidden_states = mindspore.mint.zeros_like(hidden_states)
+        expert_mask = mindspore.mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mindspore.mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mindspore.mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(
+                2, dim=-1
+            )
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mindspore.mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
+class Qwen3MoeTopKRouter(mindspore.nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.top_k = config.num_experts_per_tok
+        self.num_experts = config.num_experts
+        self.norm_topk_prob = config.norm_topk_prob
+        self.hidden_dim = config.hidden_size
+        self.weight = mindspore.Parameter(mindspore.mint.zeros((self.num_experts, self.hidden_dim)))
+
+    def construct(self, hidden_states):
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        router_logits = mindspore.mint.nn.functional.linear(hidden_states, self.weight)
+        router_logits = mindspore.mint.nn.functional.softmax(router_logits, dtype=mindspore.float32, dim=-1)
+        router_top_value, router_indices = mindspore.mint.topk(router_logits, self.top_k, dim=-1)
+        if self.norm_topk_prob:
+            router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
+        router_top_value = router_top_value.to(router_logits.dtype)
+        router_scores = router_top_value
+        return router_logits, router_scores, router_indices
+
+
+class Qwen3MoeSparseMoeBlock(mindspore.nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.experts = Qwen3MoeExperts(config)
+        self.gate = Qwen3MoeTopKRouter(config)
 
     def construct(self, hidden_states: mindspore.Tensor) -> mindspore.Tensor:
-        """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states)
-
-        routing_weights = mindspore.mint.nn.functional.softmax(router_logits, dim=1, dtype=mindspore.float32)
-        routing_weights, selected_experts = mindspore.mint.topk(routing_weights, self.top_k, dim=-1)
-        if self.norm_topk_prob:  # only diff with mixtral sparse moe block!
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = mindspore.mint.zeros(
-            (batch_size * sequence_length, hidden_dim),
-            dtype=hidden_states.dtype,
-        )
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        expert_mask = mindspore.mint.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(
-            2, 1, 0
-        )
-
-        # Loop over all available experts in the model and perform the computation on each expert
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.experts[expert_idx]
-            idx, top_x = mindspore.mint.where(expert_mask[expert_idx])
-
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support torch tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        return final_hidden_states, router_logits
+        hidden_states_reshaped = hidden_states.view(-1, hidden_dim)
+        router_logits, routing_weights, selected_experts = self.gate(hidden_states_reshaped)
+        final_hidden_states = self.experts(hidden_states_reshaped, selected_experts, routing_weights)
+        return final_hidden_states.reshape(batch_size, sequence_length, hidden_dim), router_logits
 
 
 class Qwen3MoeRMSNorm(mindspore.nn.Cell):
@@ -467,7 +487,12 @@ class Qwen3MoePreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module):
         std = self.config.initializer_range
-        if isinstance(module, mindspore.mint.nn.Linear):
+        if isinstance(module, Qwen3MoeExperts):
+            module.gate_up_proj.data.normal_(mean=0.0, std=std)
+            module.down_proj.data.normal_(mean=0.0, std=std)
+        elif isinstance(module, Qwen3MoeTopKRouter):
+            module.weight.data.normal_(mean=0.0, std=std)
+        elif isinstance(module, mindspore.mint.nn.Linear):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.bias is not None:
                 module.bias.data.zero_()
@@ -894,7 +919,7 @@ def load_balancing_loss_func(
 
 
 class Qwen3MoeForCausalLM(Qwen3MoePreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 

@@ -44,7 +44,7 @@ from ...modeling_outputs import (
     SequenceClassifierOutputWithPast,
     TokenClassifierOutput,
 )
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, MSPreTrainedModel
 from ...processing_utils import Unpack
 from ...utils import TransformersKwargs
@@ -99,17 +99,14 @@ class Phi3RotaryEmbedding(nn.Cell):
     def __init__(self, config):
         super().__init__()
 
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            rope_type = "default"
+        self.config = config
+        self.rope_type = self.config.rope_parameters["rope_type"]
+        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
-        rope_init_fn = ROPE_INIT_FUNCTIONS[rope_type]
-
-        inv_freq, _ = rope_init_fn(config)
+        inv_freq, self.attention_scaling = self.rope_init_fn(config)
         self.inv_freq = inv_freq
 
+    @dynamic_rope_update
     def construct(self, x, position_ids, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         inv_freq_expanded = self.inv_freq[None, :, None].float().broadcast_to((position_ids.shape[0], -1, 1))
@@ -118,8 +115,8 @@ class Phi3RotaryEmbedding(nn.Cell):
         # See https://github.com/huggingface/transformers/pull/29285
         freqs = ops.swapaxes((inv_freq_expanded.float() @ position_ids_expanded.float()), 1, 2)
         emb = ops.cat((freqs, freqs), axis=-1)
-        cos = emb.cos()
-        sin = emb.sin()
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
 
         # For casting to BF16
         combined = ops.concat([cos, sin], axis=-1)
@@ -251,7 +248,6 @@ class Phi3Attention(nn.Cell):
         self.scaling = 1 / math.sqrt(self.head_dim)
         self.max_position_embeddings = config.max_position_embeddings
         self.original_max_position_embeddings = config.original_max_position_embeddings
-        self.rope_theta = config.rope_theta
         self.rope_scaling = config.rope_scaling
         self.is_causal = True
 
@@ -267,14 +263,7 @@ class Phi3Attention(nn.Cell):
         self._init_rope()
 
     def _init_rope(self):
-        if self.rope_scaling is None:
-            self.rotary_emb = Phi3RotaryEmbedding(self.config)
-        else:
-            scaling_type = self.config.rope_scaling["type"]
-            if scaling_type == "longrope" or scaling_type == "su":
-                self.rotary_emb = Phi3LongRoPEScaledRotaryEmbedding(self.config)
-            else:
-                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
+        self.rotary_emb = Phi3RotaryEmbedding(self.config)
 
     def construct(
         self,
@@ -308,7 +297,7 @@ class Phi3Attention(nn.Cell):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        combined_cos_sin = self.rotary_emb(value_states, position_ids, seq_len=kv_seq_len)
+        combined_cos_sin = self.rotary_emb(value_states, position_ids)
         cos, sin = ops.chunk(combined_cos_sin, 2, -1)
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)

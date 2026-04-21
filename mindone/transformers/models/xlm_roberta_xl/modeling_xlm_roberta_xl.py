@@ -589,7 +589,7 @@ class XLMRobertaXLModel(XLMRobertaXLPreTrainedModel):
         self.pooler = XLMRobertaXLPooler(config) if add_pooling_layer else None
 
         self.attn_implementation = config._attn_implementation
-        self.position_embedding_type = config.position_embedding_type
+        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
         self.is_decoder = config.is_decoder
 
         # Initialize weights and apply final processing

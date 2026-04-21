@@ -113,15 +113,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
 class FalconRotaryEmbedding(nn.Cell):
     def __init__(self, config: FalconConfig):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+
+        self.rope_type = self.config.rope_parameters["rope_type"]
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         self.inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
@@ -135,8 +132,8 @@ class FalconRotaryEmbedding(nn.Cell):
         # See https://github.com/huggingface/transformers/pull/29285
         freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).swapaxes(1, 2)
         emb = mint.cat((freqs, freqs), dim=-1)
-        cos = emb.cos()
-        sin = emb.sin()
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
@@ -195,7 +192,6 @@ class FalconAttention(nn.Cell):
         self.split_size = self.hidden_size
         self.hidden_dropout = config.hidden_dropout
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
         self.is_causal = True
         self._use_sdpa = config._attn_implementation == "sdpa"
         self.layer_idx = layer_idx

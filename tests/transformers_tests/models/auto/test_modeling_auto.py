@@ -81,7 +81,7 @@ class AutoModelTest(unittest.TestCase):
     def test_model_file_not_found(self):
         with self.assertRaisesRegex(
             EnvironmentError,
-            "hf-internal-testing/config-no-model does not appear to have a file named pytorch_model.bin",
+            "hf-internal-testing/config-no-model does not appear to have a file named model.safetensors",
         ):
             _ = AutoModel.from_pretrained("hf-internal-testing/config-no-model")
 

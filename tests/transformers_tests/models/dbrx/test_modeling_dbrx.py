@@ -132,6 +132,7 @@ class DbrxModelTester:
 
         # Make the dictionaries
         self.ffn_config = {
+            "hidden_size": self.hidden_size,
             "ffn_hidden_size": self.ffn_hidden_size,
             "moe_jitter_eps": self.moe_jitter_eps,
             "moe_loss_weight": self.moe_loss_weight,
@@ -183,6 +184,7 @@ class DbrxModelTester:
             max_position_embeddings=self.max_position_embeddings,  # mapped to `max_seq_len`
             attn_config=self.attn_config,
             ffn_config=self.ffn_config,
+            rope_parameters={"rope_type": "default", "rope_theta": self.rope_theta},
             resid_pdrop=self.resid_pdrop,
             emb_pdrop=self.emb_pdrop,
             use_cache=self.use_cache,

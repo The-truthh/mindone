@@ -37,7 +37,7 @@ from ...integrations import scaled_dot_product_attention
 from ...mindspore_adapter import dtype_to_min
 from ...modeling_attn_mask_utils import AttentionMaskConverter
 from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, CausalLMOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, _get_rope_type
 from ...modeling_utils import PreTrainedModel
 
 logger = logging.get_logger(__name__)
@@ -655,7 +655,6 @@ class MllamaTextSelfAttention(nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.head_dim = config.hidden_size // self.num_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.rope_theta = config.rope_theta
         self.layer_idx = layer_idx
 
         self.q_proj = mint.nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -961,7 +960,7 @@ class MllamaCrossAttentionDecoderLayer(nn.Cell):
 class MllamaRotaryEmbedding(nn.Cell):
     def __init__(self, config: MllamaTextConfig):
         super().__init__()
-        self.rope_type = config.rope_scaling["rope_type"]
+        self.rope_type = _get_rope_type(config)
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 

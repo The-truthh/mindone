@@ -243,6 +243,41 @@ class HunYuanMoEV1Gate(nn.Cell):
         return logits
 
 
+class HunYuanMoEV1Experts(nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config: HunYuanMoEV1Config):
+        super().__init__()
+        self.num_experts = config.num_local_experts
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.intermediate_size
+        self.gate_up_proj = ms.Parameter(mint.empty(self.num_experts, 2 * self.intermediate_dim, self.hidden_dim))
+        self.down_proj = ms.Parameter(mint.empty(self.num_experts, self.hidden_dim, self.intermediate_dim))
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        top_k_index: ms.Tensor,
+        top_k_weights: ms.Tensor,
+    ) -> ms.Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
 class HunYuanMoEV1Moe(nn.Cell):
     def __init__(self, config: HunYuanMoEV1Config, layer_idx: Optional[int] = None):
         super().__init__()
@@ -251,48 +286,25 @@ class HunYuanMoEV1Moe(nn.Cell):
         self.num_experts = config.num_experts if isinstance(config.num_experts, int) else config.num_experts[layer_idx]
         self.top_k = config.moe_topk if isinstance(config.moe_topk, int) else config.moe_topk[layer_idx]
         self.gate = HunYuanMoEV1Gate(config, layer_idx=layer_idx)
-        # self.wg = mint.nn.Linear(config.hidden_size, config.num_experts, bias=False, dtype=ms.Tensor)
-        self.experts = nn.CellList(
-            [HunYuanMoEV1MLP(config, layer_idx=layer_idx, is_shared_mlp=False) for _ in range(self.num_experts)]
-        )
+        self.experts = HunYuanMoEV1Experts(config)
+        self.shared_mlp = HunYuanMoEV1MLP(config)
 
-        self.shared_mlp = HunYuanMoEV1MLP(config, layer_idx=layer_idx, is_shared_mlp=True)
+    def route_tokens_to_experts(self, hidden_states):
+        routing_weights = mint.functional.softmax(hidden_states, dim=1, dtype=ms.float32)
+        routing_weights, selected_experts = mint.topk(routing_weights, self.top_k, dim=-1)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        routing_weights = mint.zeros_like(hidden_states, dtype=ms.float32).scatter_(1, selected_experts, routing_weights)
+        return selected_experts, routing_weights.to(hidden_states.dtype)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states_mlp = self.shared_mlp(hidden_states)
         router_logits = self.gate(hidden_states)
         hidden_states = hidden_states.view(-1, hidden_dim)
-        # router_logits: (batch * sequence_length, n_experts)
-
-        routing_weights = mint.functional.softmax(router_logits, dim=1, dtype=ms.float32)
-        routing_weights, selected_experts = mint.topk(routing_weights, self.top_k, dim=-1)
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = mint.zeros((batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype)
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        expert_mask = mint.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        # Loop over all available experts in the model and perform the computation on each expert
-        expert_hit = mint.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-        for expert_idx in expert_hit:
-            expert_layer = self.experts[int(expert_idx)]
-            idx, top_x = mint.where(expert_mask[expert_idx].squeeze(0))
-
-            # Index the correct hidden states and compute the expert hidden state for
-            # the current expert. We need to make sure to multiply the output hidden
-            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-            # However `index_add_` only support torch tensors for indexing so we'll use
-            # the `top_x` tensor here.
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        selected_experts, routing_weights = self.route_tokens_to_experts(router_logits)
+        final_hidden_states = self.experts(hidden_states, selected_experts, routing_weights).reshape(
+            batch_size, sequence_length, hidden_dim
+        )
         return final_hidden_states + hidden_states_mlp
 
 
@@ -369,6 +381,9 @@ class HunYuanMoEV1PreTrainedModel(PreTrainedModel):
                 weights = module.weight.data
                 weights[module.padding_idx] = 0.0
                 module.weight.set_data(weights)
+        elif isinstance(module, HunYuanMoEV1Experts):
+            normal_(module.gate_up_proj, mean=0.0, std=std)
+            normal_(module.down_proj, mean=0.0, std=std)
 
 
 class HunYuanMoEV1RotaryEmbedding(nn.Cell):

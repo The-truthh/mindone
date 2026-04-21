@@ -225,7 +225,7 @@ class ChameleonAttention(nn.Cell):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
-        self.rope_theta = config.rope_theta
+        self.rope_theta = config.rope_parameters["rope_theta"]
         self.is_causal = True
         self.model_parallel_size = config.model_parallel_size
 
@@ -250,15 +250,16 @@ class ChameleonAttention(nn.Cell):
     # copied from transformers.models.llama.modeling_llama.LlamaAttention._init_rope with Llama->Chameleon
     # TODO(joao): add me back asap :)
     def _init_rope(self):
-        if self.config.rope_scaling is None:
+        rope_scaling = getattr(self.config, "rope_scaling", None)
+        if rope_scaling is None or rope_scaling.get("rope_type", rope_scaling.get("type")) == "default":
             self.rotary_emb = ChameleonRotaryEmbedding(
                 self.head_dim,
                 max_position_embeddings=self.max_position_embeddings,
                 base=self.rope_theta,
             )
         else:
-            scaling_type = self.config.rope_scaling["type"]
-            scaling_factor = self.config.rope_scaling["factor"]
+            scaling_type = rope_scaling.get("rope_type", rope_scaling.get("type"))
+            scaling_factor = rope_scaling["factor"]
             if scaling_type == "linear":
                 self.rotary_emb = ChameleonLinearScalingRotaryEmbedding(
                     self.head_dim,

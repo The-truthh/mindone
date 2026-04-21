@@ -238,39 +238,12 @@ class Glm4MoeTopkRouter(nn.Cell):
         self.weight = Parameter(mint.empty((self.n_routed_experts, config.hidden_size)))
         self.register_buffer("e_score_correction_bias", mint.zeros((self.n_routed_experts), dtype=mindspore.float32))
 
-    @mindspore._no_grad()
-    def get_topk_indices(self, scores):
-        scores_for_choice = scores.view(-1, self.n_routed_experts) + self.e_score_correction_bias.unsqueeze(0)
-        group_scores = (
-            scores_for_choice.view(-1, self.n_group, self.n_routed_experts // self.n_group)
-            .topk(2, dim=-1)[0]
-            .sum(dim=-1)
-        )
-        group_idx = mint.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
-        group_mask = mint.zeros_like(group_scores)
-        group_mask.scatter_(1, group_idx, 1)
-        score_mask = (
-            group_mask.unsqueeze(-1)
-            .expand((-1, self.n_group, self.n_routed_experts // self.n_group))
-            .reshape(-1, self.n_routed_experts)
-        )
-        scores_for_choice = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)
-        topk_indices = mint.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
-        return topk_indices
-
     def construct(self, hidden_states):
         hidden_states = hidden_states.view(-1, self.config.hidden_size)
         router_logits = mint.nn.functional.linear(
             hidden_states.type(mindspore.float32), self.weight.type(mindspore.float32)
         )
-        scores = router_logits.sigmoid()
-        topk_indices = self.get_topk_indices(scores)
-        topk_weights = scores.gather(1, topk_indices)
-        if self.norm_topk_prob:
-            denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
-            topk_weights /= denominator
-        topk_weights = topk_weights * self.routed_scaling_factor
-        return topk_indices, topk_weights
+        return router_logits
 
 
 class Glm4MoeRMSNorm(nn.Cell):
@@ -293,6 +266,41 @@ class Glm4MoeRMSNorm(nn.Cell):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
+class Glm4MoeNaiveMoe(nn.Cell):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.num_experts = config.num_local_experts
+        self.hidden_dim = config.hidden_size
+        self.intermediate_dim = config.moe_intermediate_size
+        self.gate_up_proj = Parameter(mint.empty((self.num_experts, 2 * self.intermediate_dim, self.hidden_dim)))
+        self.down_proj = Parameter(mint.empty((self.num_experts, self.hidden_dim, self.intermediate_dim)))
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(
+        self,
+        hidden_states: Tensor,
+        top_k_index: Tensor,
+        top_k_weights: Tensor,
+    ) -> Tensor:
+        final_hidden_states = mint.zeros_like(hidden_states)
+        expert_mask = mint.nn.functional.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            top_k_pos, token_idx = mint.where(expert_mask[expert_idx])
+            if token_idx.shape[0] == 0:
+                continue
+            current_state = hidden_states[token_idx]
+            gate, up = mint.nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            current_hidden_states = self.act_fn(gate) * up
+            current_hidden_states = mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.astype(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
 class Glm4MoeMoE(nn.Cell):
     """
     A mixed expert module containing shared experts.
@@ -301,46 +309,50 @@ class Glm4MoeMoE(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.experts = nn.CellList(
-            [Glm4MoeMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(config.n_routed_experts)]
-        )
+        self.experts = Glm4MoeNaiveMoe(config)
         self.gate = Glm4MoeTopkRouter(config)
         self.shared_experts = Glm4MoeMLP(
             config=config, intermediate_size=config.moe_intermediate_size * config.n_shared_experts
         )
+        self.n_routed_experts = config.n_routed_experts
+        self.n_group = config.n_group
+        self.topk_group = config.topk_group
+        self.norm_topk_prob = config.norm_topk_prob
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.top_k = config.num_experts_per_tok
 
-    def moe(self, hidden_states: Tensor, topk_indices: Tensor, topk_weights: Tensor):
-        r"""
-        CALL FOR CONTRIBUTION! I don't have time to optimise this right now, but expert weights need to be fused
-        to not have to do a loop here (deepseek has 256 experts soooo yeah).
-        """
-        final_hidden_states = mint.zeros_like(hidden_states, dtype=topk_weights.dtype)
-        expert_mask = mint.nn.functional.one_hot(topk_indices, num_classes=len(self.experts))
-        expert_mask = expert_mask.permute(2, 0, 1)
-
-        for expert_idx in range(len(self.experts)):
-            expert = self.experts[expert_idx]
-            mask = expert_mask[expert_idx]
-            token_indices, weight_indices = mint.where(mask)
-
-            if token_indices.numel() > 0:
-                expert_weights = topk_weights[token_indices, weight_indices]
-                expert_input = hidden_states[token_indices]
-                expert_output = expert(expert_input)
-                weighted_output = expert_output * expert_weights.unsqueeze(-1)
-                final_hidden_states.index_add_(0, token_indices, weighted_output)
-
-        # in original deepseek, the output of the experts are gathered once we leave this module
-        # thus the moe module is itelsf an IsolatedParallel module
-        # and all expert are "local" meaning we shard but we don't gather
-        return final_hidden_states.type(hidden_states.dtype)
+    def route_tokens_to_experts(self, router_logits):
+        router_logits = router_logits.sigmoid()
+        router_logits_for_choice = router_logits + self.gate.e_score_correction_bias
+        group_scores = (
+            router_logits_for_choice.view(-1, self.n_group, self.n_routed_experts // self.n_group)
+            .topk(2, dim=-1)[0]
+            .sum(dim=-1)
+        )
+        group_idx = mint.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
+        group_mask = mint.zeros_like(group_scores)
+        group_mask.scatter_(1, group_idx, 1)
+        score_mask = (
+            group_mask.unsqueeze(-1)
+            .expand((-1, self.n_group, self.n_routed_experts // self.n_group))
+            .reshape(-1, self.n_routed_experts)
+        )
+        scores_for_choice = router_logits_for_choice.masked_fill(~score_mask.bool(), 0.0)
+        topk_indices = mint.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
+        topk_weights = router_logits.gather(1, topk_indices)
+        if self.norm_topk_prob:
+            denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weights /= denominator
+        topk_weights = topk_weights * self.routed_scaling_factor
+        return topk_indices, topk_weights
 
     def construct(self, hidden_states):
         residuals = hidden_states
         orig_shape = hidden_states.shape
-        topk_indices, topk_weights = self.gate(hidden_states)
+        router_logits = self.gate(hidden_states)
+        topk_indices, topk_weights = self.route_tokens_to_experts(router_logits)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        hidden_states = self.moe(hidden_states, topk_indices, topk_weights).view(*orig_shape)
+        hidden_states = self.experts(hidden_states, topk_indices, topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states
 
@@ -409,6 +421,7 @@ class Glm4MoePreTrainedModel(PreTrainedModel):
         "hidden_states": Glm4MoeDecoderLayer,
         "attentions": Glm4MoeAttention,
     }
+    _keep_in_fp32_modules_strict = ["e_score_correction_bias"]
 
     def _init_weights(self, module):
         super()._init_weights(module)
@@ -416,6 +429,21 @@ class Glm4MoePreTrainedModel(PreTrainedModel):
             module.weight.set_data(
                 initializer(
                     Normal(sigma=self.config.initializer_range, mean=0.0), module.weight.shape, module.weight.dtype
+                )
+            )
+        elif isinstance(module, Glm4MoeNaiveMoe):
+            module.gate_up_proj.set_data(
+                initializer(
+                    Normal(sigma=self.config.initializer_range, mean=0.0),
+                    module.gate_up_proj.shape,
+                    module.gate_up_proj.dtype,
+                )
+            )
+            module.down_proj.set_data(
+                initializer(
+                    Normal(sigma=self.config.initializer_range, mean=0.0),
+                    module.down_proj.shape,
+                    module.down_proj.dtype,
                 )
             )
 

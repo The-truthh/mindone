@@ -63,17 +63,26 @@ class BioGptLearnedPositionalEmbedding(mindspore.mint.nn.Embedding):
         self.offset = 2
         super().__init__(num_embeddings + self.offset, embedding_dim)
 
-    def construct(self, attention_mask: mindspore.Tensor, past_key_values_length: int = 0):
+    def construct(
+        self,
+        attention_mask: mindspore.Tensor,
+        past_key_values_length: int = 0,
+        position_ids: Optional[mindspore.Tensor] = None,
+    ):
         """`input_ids_shape` is expected to be [bsz x seqlen]."""
-        attention_mask = attention_mask.long()
 
-        # create positions depending on attention_mask
-        positions = (mindspore.mint.cumsum(attention_mask, dim=1).type_as(attention_mask) * attention_mask).long() - 1
+        if position_ids is None:
+            attention_mask = attention_mask.long()
 
-        # cut positions if `past_key_values_length` is > 0
-        positions = positions[:, past_key_values_length:]
+            # create positions depending on attention_mask
+            position_ids = (
+                mindspore.mint.cumsum(attention_mask, dim=1).type_as(attention_mask) * attention_mask
+            ).long() - 1
 
-        return super().construct(positions + self.offset)
+            # cut positions if `past_key_values_length` is > 0
+            position_ids = position_ids[:, past_key_values_length:]
+
+        return super().construct(position_ids + self.offset)
 
 
 # Copied from transformers.models.bart.modeling_bart.BartScaledWordEmbedding with Bart->BioGpt
@@ -586,6 +595,7 @@ class BioGptModel(BioGptPreTrainedModel):
         self,
         input_ids: Optional[mindspore.Tensor] = None,
         attention_mask: Optional[mindspore.Tensor] = None,
+        position_ids: Optional[mindspore.Tensor] = None,
         head_mask: Optional[mindspore.Tensor] = None,
         inputs_embeds: Optional[mindspore.Tensor] = None,
         past_key_values: Optional[Tuple[Tuple[mindspore.Tensor]]] = None,
@@ -593,6 +603,7 @@ class BioGptModel(BioGptPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        cache_position: Optional[mindspore.Tensor] = None,
         **kwargs,  # NOOP kwargs, for now
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -620,6 +631,12 @@ class BioGptModel(BioGptPreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input)
 
+        if cache_position is None:
+            cache_position = mindspore.mint.arange(
+                past_key_values_length,
+                past_key_values_length + inputs_embeds.shape[1],
+            )
+
         if attention_mask is None:
             attention_mask = mindspore.mint.ones(
                 (inputs_embeds.shape[0], inputs_embeds.shape[1] + past_key_values_length),
@@ -632,7 +649,10 @@ class BioGptModel(BioGptPreTrainedModel):
             )
 
         # embed positions
-        positions = self.embed_positions(attention_mask, past_key_values_length)
+        if position_ids is None:
+            position_ids = cache_position.unsqueeze(0)
+
+        positions = self.embed_positions(attention_mask, past_key_values_length, position_ids=position_ids)
 
         if self._use_sdpa and not output_attentions and head_mask is None:
             # output_attentions=True & head_mask can not be supported when using SDPA, fall back to

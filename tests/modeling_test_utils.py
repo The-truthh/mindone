@@ -200,6 +200,8 @@ def get_modules(pt_module, ms_module, dtype, *args, **kwargs):
             f"Missing keys: {missing_keys}\n"
             f"Unexpected keys: {unexpected_keys}\n"
         )
+    if hasattr(ms_modules_instance, "tie_weights"):
+        ms_modules_instance.tie_weights()
 
     if dtype == "fp16":
         pt_modules_instance = pt_modules_instance.to(torch.float16)

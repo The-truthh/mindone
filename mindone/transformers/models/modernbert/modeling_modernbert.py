@@ -100,17 +100,14 @@ class ModernBertMLP(nn.Cell):
 class ModernBertRotaryEmbedding(nn.Cell):
     def __init__(self, config: ModernBertConfig, dim: int, base: float):
         super().__init__()
-        # BC: "rope_type" was originally "type"
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-        else:
-            self.rope_type = "default"
+        self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
+        self.rope_init_fn = None
+        inv_freq = 1.0 / (base ** (mint.arange(0, dim, 2, dtype=ms.int64).float() / dim))
+        self.attention_scaling = 1.0
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
@@ -309,10 +306,9 @@ class ModernBertAttention(nn.Cell):
         else:
             self.local_attention = (-1, -1)
 
-        rope_theta = config.global_rope_theta
-        if self.local_attention != (-1, -1):
-            if config.local_rope_theta is not None:
-                rope_theta = config.local_rope_theta
+        layer_type = config.layer_types[layer_id]
+        rope_parameters_dict = config.rope_parameters[layer_type] if layer_type is not None else config.rope_parameters
+        rope_theta = rope_parameters_dict["rope_theta"]
 
         self.rotary_emb = ModernBertRotaryEmbedding(config=config, dim=self.head_dim, base=rope_theta)
 

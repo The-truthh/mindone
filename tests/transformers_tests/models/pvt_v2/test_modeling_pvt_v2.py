@@ -37,7 +37,7 @@ from tests.transformers_tests.models.modeling_common import floats_numpy, ids_nu
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-2}
 # graph mode is not supported in this model
-MODES = [1, 0]
+MODES = [1]
 
 
 class PvtV2ModelTester:

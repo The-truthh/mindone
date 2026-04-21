@@ -129,7 +129,7 @@ class SplinterSelfAttention(mindspore.nn.Cell):
                 2 * config.max_position_embeddings - 1, self.attention_head_size
             )
 
-        self.is_decoder = config.is_decoder
+        self.is_decoder = getattr(config, "is_decoder", False)
 
     def transpose_for_scores(self, x: mindspore.Tensor) -> mindspore.Tensor:
         new_x_shape = x.shape[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -357,8 +357,8 @@ class SplinterLayer(mindspore.nn.Cell):
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = SplinterAttention(config)
-        self.is_decoder = config.is_decoder
-        self.add_cross_attention = config.add_cross_attention
+        self.is_decoder = getattr(config, "is_decoder", False)
+        self.add_cross_attention = getattr(config, "add_cross_attention", False)
         if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
@@ -460,7 +460,7 @@ class SplinterEncoder(mindspore.nn.Cell):
     ) -> Union[Tuple[mindspore.Tensor], BaseModelOutputWithPastAndCrossAttentions]:
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
-        all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
+        all_cross_attentions = () if output_attentions and getattr(self.config, "add_cross_attention", False) else None
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -504,7 +504,7 @@ class SplinterEncoder(mindspore.nn.Cell):
                 next_decoder_cache += (layer_outputs[-1],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
-                if self.config.add_cross_attention:
+                if getattr(self.config, "add_cross_attention", False):
                     all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
 
         if output_hidden_states:
@@ -703,7 +703,7 @@ class SplinterModel(SplinterPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.config.is_decoder:
+        if getattr(self.config, "is_decoder", False):
             use_cache = use_cache if use_cache is not None else self.config.use_cache
         else:
             use_cache = False
@@ -739,7 +739,7 @@ class SplinterModel(SplinterPreTrainedModel):
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
-        if self.config.is_decoder and encoder_hidden_states is not None:
+        if getattr(self.config, "is_decoder", False) and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.shape
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:

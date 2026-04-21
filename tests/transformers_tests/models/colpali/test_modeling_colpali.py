@@ -13,6 +13,7 @@
 import numpy as np
 import pytest
 import torch
+from packaging import version
 from transformers.models.colpali.configuration_colpali import ColPaliConfig
 
 import mindspore as ms
@@ -202,6 +203,9 @@ def test_named_modules(
     dtype,
     mode,
 ):
+    if version.parse(torch.__version__.split("+")[0]) < version.parse("2.6"):
+        pytest.skip("ColPali/PaliGemma token_type_ids masking path requires torch>=2.6 in transformers v5.")
+
     ms.set_context(mode=mode)
 
     (

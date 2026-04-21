@@ -336,20 +336,8 @@ class LlavaNextVideoModel(LlavaNextVideoPreTrainedModel):
         if self.language_model._tied_weights_keys is not None:
             self._tied_weights_keys = [f"language_model.{k}" for k in self.language_model._tied_weights_keys]
 
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
-        self._padding_side = "left"  # set it to left by default, user can use setter to change padding_sides
         self.vision_resampler = LlavaNextVideoPooler(config)
         self.post_init()
-
-    @property
-    def padding_side(self):
-        return self._padding_side
-
-    @padding_side.setter
-    def padding_side(self, padding_side: str):
-        if padding_side not in ["left", "right"]:
-            raise ValueError(f"{padding_side} is not `left` or `right`.")
-        self._padding_side = padding_side
 
     def get_input_embeddings(self):
         return self.language_model.get_input_embeddings()

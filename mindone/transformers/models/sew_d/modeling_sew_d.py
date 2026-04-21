@@ -1152,7 +1152,7 @@ class SEWDPreTrainedModel(PreTrainedModel):
             #         with deepspeed.zero.GatheredParameters(module.weight, modifier_rank=0):
             #             nn.init.kaiming_normal_(module.weight.data)
             # else:
-            module.weight.data.set_data(initializer(HeNormal(), module.weight.data.shape, module.weight.data.dtype))
+            module.weight.set_data(initializer(HeNormal(), module.weight.shape, module.weight.dtype))
         elif isinstance(module, mint.nn.Embedding):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
