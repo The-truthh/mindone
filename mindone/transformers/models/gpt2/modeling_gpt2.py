@@ -450,6 +450,7 @@ class GPT2PreTrainedModel(MSPreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_sdpa = False
     _supports_dynamic_input = True
+    _keys_to_ignore_on_load_unexpected = [r"(?:transformer\.)?h\.\d+\.attn\.bias"]
 
     def __init__(self, *inputs, **kwargs):
         super().__init__(*inputs, **kwargs)
@@ -896,7 +897,7 @@ class GPT2Model(GPT2PreTrainedModel):
     GPT2_START_DOCSTRING,
 )
 class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "transformer.wte.weight"}
 
     def __init__(self, config):
         super().__init__(config)
@@ -1117,7 +1118,7 @@ input sequence).
     GPT2_START_DOCSTRING,
 )
 class GPT2DoubleHeadsModel(GPT2PreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "transformer.wte.weight"}
 
     def __init__(self, config):
         super().__init__(config)

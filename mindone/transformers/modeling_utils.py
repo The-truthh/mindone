@@ -163,9 +163,14 @@ def _get_pt2ms_mapped_k(mappings, has_prefix_module, expects_prefix_module, load
             for s in loaded_keys
         ]
     elif not has_prefix_module and expects_prefix_module:
-        loaded_keys = [
-            mappings.get(".".join([prefix, s]), (".".join([prefix, s]), lambda x: x))[0] for s in loaded_keys
-        ]
+        _prefix = f"{prefix}."
+        mapped_keys = []
+        for s in loaded_keys:
+            mapped_key = mappings.get(f"{prefix}.{s}", mappings.get(s, (s, lambda x: x)))[0]
+            if mapped_key is not None and mapped_key.startswith(_prefix):
+                mapped_key = mapped_key[len(_prefix) :]
+            mapped_keys.append(mapped_key)
+        loaded_keys = mapped_keys
     else:
         loaded_keys = [mappings.get(s, (s, lambda x: x))[0] for s in loaded_keys]
     return loaded_keys
@@ -3439,6 +3444,12 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         # Clean-up unexpected keys
         if ignore_unexpected_regex is not None:
             unexpected_keys = [key for key in unexpected_keys if ignore_unexpected_regex.search(key) is None]
+
+        tied_weights = getattr(self, "_tied_weights_keys", None)
+        if isinstance(tied_weights, dict):
+            missing_keys = [
+                key for key in missing_keys if key not in tied_weights or tied_weights[key] in missing_keys
+            ]
 
         # Note: only the unexpected keys should remove the added prefix here, to correctly display the original name
         # in the warnings. For missing keys, we should show the prefix in the warning as it's part of the final model

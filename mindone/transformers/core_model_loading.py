@@ -271,11 +271,19 @@ def convert_and_load_state_dict_in_model(
     # Remove non-persistent buffers from unexpected keys
     model_buffers = {n for n, _ in model.named_buffers()}
     unexpected_keys = unexpected_keys - model_buffers
+    if hasattr(model, "_adjust_missing_and_unexpected_keys"):
+        missing_keys, unexpected_keys = model._adjust_missing_and_unexpected_keys(
+            list(missing_keys),
+            list(unexpected_keys),
+            False,
+        )
+        missing_keys = set(missing_keys)
+        unexpected_keys = set(unexpected_keys)
 
     # Log results
-    if missing_keys:
+    if missing_keys and not is_sharded:
         logger.warning(f"Missing keys: {sorted(missing_keys)}")
-    if unexpected_keys:
+    if unexpected_keys and not is_sharded:
         logger.warning(f"Unexpected keys: {sorted(unexpected_keys)}")
     if mismatched_keys:
         logger.warning(f"Mismatched keys: {len(mismatched_keys)}")

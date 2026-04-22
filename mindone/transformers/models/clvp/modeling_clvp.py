@@ -1004,6 +1004,13 @@ class ClvpDecoder(ClvpPreTrainedModel):
         return_dict: Optional[bool] = None,
         cache_position: Optional[ms.Tensor] = None,
     ) -> Union[tuple, BaseModelOutputWithPastAndCrossAttentions]:
+        r"""
+        head_mask (`ms.Tensor` of shape `(num_hidden_layers, num_attention_heads)`, *optional*):
+            Mask to nullify selected heads of the attention modules. Mask values selected in `[0, 1]`:
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
+        """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1164,6 +1171,13 @@ class ClvpModel(ClvpPreTrainedModel):
         return_dict: Optional[bool] = None,
         cache_position: Optional[ms.Tensor] = None,
     ) -> Union[tuple, BaseModelOutputWithPastAndCrossAttentions]:
+        r"""
+        head_mask (`ms.Tensor` of shape `(num_hidden_layers, num_attention_heads)`, *optional*):
+            Mask to nullify selected heads of the attention modules. Mask values selected in `[0, 1]`:
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
+        """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1332,6 +1346,11 @@ class ClvpForCausalLM(ClvpPreTrainedModel, GenerationMixin):
         cache_position: Optional[ms.Tensor] = None,
     ) -> Union[tuple, CausalLMOutputWithCrossAttentions]:
         r"""
+        head_mask (`ms.Tensor` of shape `(num_hidden_layers, num_attention_heads)`, *optional*):
+            Mask to nullify selected heads of the attention modules. Mask values selected in `[0, 1]`:
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
         labels (`ms.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
             `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`

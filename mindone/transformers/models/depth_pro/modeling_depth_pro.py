@@ -662,6 +662,12 @@ class DepthProModel(DepthProPreTrainedModel):
         return_dict: Optional[bool] = None,
     ) -> Union[tuple, DepthProOutput]:
         r"""
+        head_mask (`ms.Tensor` of shape `(num_hidden_layers, num_attention_heads)`, *optional*):
+            Mask to nullify selected heads of the attention modules. Mask values selected in `[0, 1]`:
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
+
         Examples:
 
         ```python
@@ -1049,6 +1055,11 @@ class DepthProForDepthEstimation(DepthProPreTrainedModel):
         return_dict: Optional[bool] = None,
     ) -> Union[tuple[ms.Tensor], DepthProDepthEstimatorOutput]:
         r"""
+        head_mask (`ms.Tensor` of shape `(num_hidden_layers, num_attention_heads)`, *optional*):
+            Mask to nullify selected heads of the attention modules. Mask values selected in `[0, 1]`:
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
         labels (`ms.Tensor` of shape `(batch_size, height, width)`, *optional*):
             Ground truth depth estimation maps for computing the loss.
 

@@ -291,7 +291,7 @@ class Qwen3VLTextRotaryEmbedding(nn.Cell):
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
+        self.register_buffer("original_inv_freq", inv_freq, persistent=False)
 
         self.mrope_section = config.rope_scaling.get("mrope_section", [24, 20, 20])
 
@@ -1262,7 +1262,7 @@ class Qwen3VLCausalLMOutputWithPast(ModelOutput):
 
 class Qwen3VLForConditionalGeneration(Qwen3VLPreTrainedModel, GenerationMixin):
     _checkpoint_conversion_mapping = {}
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
     # Reference: fix gemma3 grad acc #37208
     accepts_loss_kwargs = False
     config: Qwen3VLConfig

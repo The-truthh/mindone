@@ -108,19 +108,24 @@ class _LazyAutoProcessorMapping(dict):
     """
 
     _MAPPING_NAMES = {
-        "image_processor": ("transformers.models.auto.image_processing_auto", "AutoImageProcessor"),
-        "video_processor": ("transformers.models.auto.video_processing_auto", "AutoVideoProcessor"),
-        "feature_extractor": ("transformers.models.auto.feature_extraction_auto", "AutoFeatureExtractor"),
-        "audio_processor": ("transformers.models.auto.feature_extraction_auto", "AutoFeatureExtractor"),
-        "tokenizer": ("transformers.models.auto.tokenization_auto", "AutoTokenizer"),
+        "image_processor": ("mindone.transformers.models.auto.image_processing_auto", "AutoImageProcessor"),
+        "video_processor": ("mindone.transformers.models.auto.video_processing_auto", "AutoVideoProcessor"),
+        "feature_extractor": ("mindone.transformers.models.auto.feature_extraction_auto", "AutoFeatureExtractor"),
+        "audio_processor": ("mindone.transformers.models.auto.feature_extraction_auto", "AutoFeatureExtractor"),
+        "tokenizer": ("mindone.transformers.models.auto.tokenization_auto", "AutoTokenizer"),
     }
 
     def __getitem__(self, key):
         if key not in self._MAPPING_NAMES:
             raise KeyError(key)
         module_name, attr_name = self._MAPPING_NAMES[key]
-        module = __import__(module_name, fromlist=[attr_name])
-        return getattr(module, attr_name)
+        try:
+            module = __import__(module_name, fromlist=[attr_name])
+            return getattr(module, attr_name)
+        except (ImportError, AttributeError):
+            fallback_module_name = module_name.replace("mindone.transformers.", "transformers.", 1)
+            module = __import__(fallback_module_name, fromlist=[attr_name])
+            return getattr(module, attr_name)
 
     def __contains__(self, key):
         return key in self._MAPPING_NAMES
@@ -654,9 +659,15 @@ class ProcessorMixin(PushToHubMixin):
         # Nothing is ever going to be an instance of "AutoXxx", in that case we check the base class.
         class_name = AUTO_TO_BASE_CLASS_MAPPING.get(class_name, class_name)
         if isinstance(class_name, tuple):
-            proper_class = tuple(self.get_possibly_dynamic_module(n) for n in class_name if n is not None)
+            proper_classes = []
+            for name in class_name:
+                if name is None:
+                    continue
+                proper_classes.extend(self.get_possibly_dynamic_modules(name))
+            proper_class = tuple(dict.fromkeys(proper_classes))
         else:
-            proper_class = self.get_possibly_dynamic_module(class_name)
+            proper_classes = self.get_possibly_dynamic_modules(class_name)
+            proper_class = proper_classes[0] if len(proper_classes) == 1 else tuple(proper_classes)
 
         if not isinstance(argument, proper_class):
             raise TypeError(
@@ -1584,6 +1595,15 @@ class ProcessorMixin(PushToHubMixin):
                     f"it should be registered using the relevant `AutoClass.register()` function so that "
                     f"other functions can find it!"
                 )
+
+    @staticmethod
+    def get_possibly_dynamic_modules(module_name):
+        primary_class = ProcessorMixin.get_possibly_dynamic_module(module_name)
+        classes = [primary_class]
+        fallback_class = getattr(transformers_module, module_name, None)
+        if fallback_class is not None and fallback_class is not primary_class:
+            classes.append(fallback_class)
+        return classes
 
     def batch_decode(self, *args, **kwargs):
         """

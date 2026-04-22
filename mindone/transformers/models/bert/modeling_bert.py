@@ -1015,7 +1015,10 @@ class BertModel(BertPreTrainedModel):
 
 
 class BertForPreTraining(BertPreTrainedModel):
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -1120,7 +1123,10 @@ class BertForPreTraining(BertPreTrainedModel):
 
 
 class BertLMHeadModel(BertPreTrainedModel):
-    _tied_weights_keys = ["cls.predictions.decoder.bias", "cls.predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -1264,7 +1270,10 @@ class BertLMHeadModel(BertPreTrainedModel):
 
 
 class BertForMaskedLM(BertPreTrainedModel):
-    _tied_weights_keys = ["predictions.decoder.bias", "cls.predictions.decoder.weight"]
+    _tied_weights_keys = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
 
     def __init__(self, config):
         super().__init__(config)
