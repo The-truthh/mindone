@@ -173,6 +173,7 @@ from . import (
     minicpm4,
     minicpmv_4_5,
     ministral,
+    ministral3,
     mistral,
     mistral3,
     mixtral,

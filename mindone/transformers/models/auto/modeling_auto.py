@@ -1505,6 +1505,15 @@ if version.parse(transformers.__version__) >= version.parse("4.57.0"):
 
     MODEL_FOR_TEXT_TO_WAVEFORM_MAPPING_NAMES.update({("qwen3_omni_moe", "Qwen3OmniMoeForConditionalGeneration")})
 
+if version.parse(transformers.__version__) >= version.parse("5.0.0"):
+    MODEL_MAPPING_NAMES.update({"ministral3": "Ministral3Model"})
+    MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.update({"ministral3": "Ministral3ForCausalLM"})
+    MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.update(
+        {"ministral3": "Ministral3ForSequenceClassification"}
+    )
+    MODEL_FOR_QUESTION_ANSWERING_MAPPING_NAMES.update({"ministral3": "Ministral3ForQuestionAnswering"})
+    MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES.update({"ministral3": "Ministral3ForTokenClassification"})
+
 MODEL_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, MODEL_MAPPING_NAMES)
 MODEL_FOR_PRETRAINING_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, MODEL_FOR_PRETRAINING_MAPPING_NAMES)
 MODEL_WITH_LM_HEAD_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, MODEL_WITH_LM_HEAD_MAPPING_NAMES)

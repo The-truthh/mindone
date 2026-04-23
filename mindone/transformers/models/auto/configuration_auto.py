@@ -798,6 +798,10 @@ if version.parse(transformers.__version__) >= version.parse("4.57.0"):
         }
     )
 
+if version.parse(transformers.__version__) >= version.parse("5.0.0"):
+    CONFIG_MAPPING_NAMES.update({"ministral3": "Ministral3Config"})
+    MODEL_NAMES_MAPPING.update({"ministral3": "Ministral3"})
+
 
 def model_type_to_module_name(key):
     """Converts a config key to the corresponding module."""
