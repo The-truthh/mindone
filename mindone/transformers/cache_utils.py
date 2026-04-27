@@ -1074,9 +1074,7 @@ class EncoderDecoderCache(Cache):
                     self_attention_cache_data.append(combined_cache_data[:2])
                     cross_attention_cache_data.append(combined_cache_data[2:])
                 else:
-                    raise ValueError(
-                        f"Expected len(combined_cache_data) to be 4 or 6, got {len(combined_cache_data)}"
-                    )
+                    raise ValueError(f"Expected len(combined_cache_data) to be 4 or 6, got {len(combined_cache_data)}")
             self.self_attention_cache = DynamicCache(self_attention_cache_data)
             self.cross_attention_cache = DynamicCache(cross_attention_cache_data)
         # Otherwise, we should get two arguments, a self-attention cache and a cross-attention cache
@@ -1104,7 +1102,9 @@ class EncoderDecoderCache(Cache):
         for self_attention_layer, cross_attention_layer in zip(self.self_attention_cache, self.cross_attention_cache):
             yield self_attention_layer + cross_attention_layer
 
-    def __getitem__(self, layer_idx: int) -> tuple[ms.Tensor, ms.Tensor, Optional[ms.Tensor], ms.Tensor, ms.Tensor, Optional[ms.Tensor]]:
+    def __getitem__(
+        self, layer_idx: int
+    ) -> tuple[ms.Tensor, ms.Tensor, Optional[ms.Tensor], ms.Tensor, ms.Tensor, Optional[ms.Tensor]]:
         """
         Support for backwards-compatible `past_key_values` indexing, e.g. `past_key_values[0][0].shape[2]` to get the
         sequence length.
@@ -1144,7 +1144,9 @@ class EncoderDecoderCache(Cache):
                 key_states, value_states = key_value_states[:2]
                 cache.self_attention_cache.update(key_states, value_states, layer_idx)
                 if len(key_value_states) > 2:
-                    cross_attention_states = key_value_states[3:] if len(key_value_states) >= 6 else key_value_states[2:]
+                    cross_attention_states = (
+                        key_value_states[3:] if len(key_value_states) >= 6 else key_value_states[2:]
+                    )
                     key_states, value_states = cross_attention_states[:2]
                     cache.cross_attention_cache.update(key_states, value_states, layer_idx)
                     cache.is_updated[layer_idx] = True

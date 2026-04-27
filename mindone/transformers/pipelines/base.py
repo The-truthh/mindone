@@ -30,10 +30,10 @@ from contextlib import contextmanager
 from os.path import abspath, exists
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+from transformers import PreTrainedTokenizer
 from transformers.dynamic_module_utils import custom_object_save
 from transformers.generation import GenerationConfig
 from transformers.models.auto import AutoConfig, AutoTokenizer
-from transformers import PreTrainedTokenizer
 from transformers.utils import ModelOutput, PushToHubMixin, add_end_docstrings, copy_func, logging
 
 from ..feature_extraction_utils import PreTrainedFeatureExtractor

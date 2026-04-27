@@ -221,9 +221,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
         # Update past key values and masks
         self._update_past_and_masks(input_ids)
         # Generate candidates
-        generation_args = self._prepare_generation_args(
-            input_ids, min_new_tokens, max_new_tokens, is_first_iteration
-        )
+        generation_args = self._prepare_generation_args(input_ids, min_new_tokens, max_new_tokens, is_first_iteration)
         candidate_ids, candidate_logits = self._generate_candidates(generation_args)
         return candidate_ids, candidate_logits
 

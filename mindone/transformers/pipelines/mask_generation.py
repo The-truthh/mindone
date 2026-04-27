@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from ..image_utils import load_image
-from ..utils import is_mindspore_available, logging
+from ..utils import is_mindspore_available, logging, requires_backends
 from .base import ChunkPipeline
 
 if is_mindspore_available():

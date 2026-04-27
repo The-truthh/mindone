@@ -23,7 +23,6 @@ This module provides backward compatibility.
 """
 
 import unicodedata
-import string
 
 
 def whitespace_tokenize(text):

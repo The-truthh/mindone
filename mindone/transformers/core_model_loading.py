@@ -27,12 +27,11 @@ delegates to after the checkpoint payload has already been normalized.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any
 
 import mindspore as ms
 from mindspore import nn
-
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +45,7 @@ class WeightRenaming:
         source_patterns: List of source patterns to match (can use * as wildcard)
         target_patterns: List of target patterns to replace with
     """
+
     source_patterns: list[str]
     target_patterns: list[str]
 
@@ -62,6 +62,7 @@ class WeightConverter:
         renaming: WeightRenaming configuration
         op: Optional conversion operation (not implemented in MindONE minimal version)
     """
+
     renaming: WeightRenaming
     op: Any | None = None
 
@@ -78,6 +79,7 @@ class LoadStateDictConfig:
     needs for the staged v5 migration. It should not be treated as a full
     replacement for upstream ``core_model_loading.LoadStateDictConfig``.
     """
+
     pretrained_model_name_or_path: str | None = None
     use_safetensors: bool = True
     ignore_mismatched_sizes: bool = False
@@ -153,6 +155,7 @@ def _apply_weight_mapping(
 def _match_pattern(key: str, pattern: str) -> bool:
     """Match a key against a pattern (supports * as wildcard)."""
     import fnmatch
+
     return fnmatch.fnmatch(key, pattern)
 
 
@@ -225,9 +228,6 @@ def convert_and_load_state_dict_in_model(
     """
     conversion_errors = set()
     disk_offload_index = None  # Not supported in MindONE minimal version
-
-    # Track original keys before any transformation
-    original_keys = set(state_dict.keys())
 
     # Step 1: Apply weight mapping if provided
     if weight_mapping is not None:

@@ -1705,6 +1705,7 @@ from .models.yoso import (
 from .models.zamba import ZambaForCausalLM, ZambaForSequenceClassification, ZambaModel, ZambaPreTrainedModel
 from .models.zamba2 import Zamba2ForCausalLM, Zamba2ForSequenceClassification, Zamba2Model, Zamba2PreTrainedModel
 from .models.zoedepth import ZoeDepthForDepthEstimation, ZoeDepthPreTrainedModel
+from .optimization import SchedulerType, get_scheduler
 from .pipelines import (
     ImageToImagePipeline,
     ImageToTextPipeline,
@@ -1712,7 +1713,6 @@ from .pipelines import (
     VisualQuestionAnsweringPipeline,
     pipeline,
 )
-from .optimization import SchedulerType, get_scheduler
 from .processing_utils import ProcessorMixin
 from .trainer import Trainer
 from .training_args import TrainingArguments

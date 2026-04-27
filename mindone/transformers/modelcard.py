@@ -29,13 +29,7 @@ import yaml
 from huggingface_hub import is_offline_mode, model_info
 from huggingface_hub.utils import HFValidationError
 from transformers import __version__
-from transformers.utils import (
-    MODEL_CARD_NAME,
-    cached_file,
-    is_datasets_available,
-    is_tokenizers_available,
-    logging,
-)
+from transformers.utils import MODEL_CARD_NAME, cached_file, is_datasets_available, is_tokenizers_available, logging
 
 from .models.auto.modeling_auto import (
     MODEL_FOR_AUDIO_CLASSIFICATION_MAPPING_NAMES,
@@ -797,8 +791,7 @@ def extract_hyperparameters_from_keras(model):
     Note: This function is not supported in mindone as TensorFlow is not available.
     """
     raise NotImplementedError(
-        "Extracting hyperparameters from Keras models is not supported. "
-        "TensorFlow is not available in mindone."
+        "Extracting hyperparameters from Keras models is not supported. " "TensorFlow is not available in mindone."
     )
 
 

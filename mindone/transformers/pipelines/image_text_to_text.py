@@ -221,7 +221,7 @@ class ImageTextToTextPipeline(Pipeline):
                 logger.warning_once(
                     "Stopping on a multiple token sequence is not yet supported on transformers. The first token of"
                     " the stop sequence will be used as the stop sequence string in the interim."
-            )
+                )
             generate_kwargs["eos_token_id"] = stop_sequence_ids[0]
         if generate_kwargs:
             forward_kwargs["generate_kwargs"] = generate_kwargs

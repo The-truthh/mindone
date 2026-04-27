@@ -1863,9 +1863,7 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: ms.Tensor) ->
     position_ids = mint.zeros((batch_size, seq_len), dtype=ms.int64)
 
     for row in range(batch_size):
-        special_positions = [
-            col for col in range(seq_len) if int(input_ids[row, col]) in SPECIAL_TOKENS
-        ]
+        special_positions = [col for col in range(seq_len) if int(input_ids[row, col]) in SPECIAL_TOKENS]
         next_special = []
         prev_special = []
         for col in range(seq_len):
@@ -1880,10 +1878,7 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: ms.Tensor) ->
             prev_special.append(previous)
             next_special.append(following)
 
-        valid_block = [
-            following not in (0, seq_len - 1, seq_len)
-            for following in next_special
-        ]
+        valid_block = [following not in (0, seq_len - 1, seq_len) for following in next_special]
         for col in range(seq_len):
             if valid_block[col]:
                 position_ids[row, col] = max(col - prev_special[col] - 1, 0)

@@ -172,7 +172,9 @@ def get_feature_extractor_config(
         _raise_exceptions_for_connection_errors=False,
     )
     if not resolved_config_file and not resolved_processor_file:
-        logger.info("Could not locate the feature extractor configuration file, will try to use the model config instead.")
+        logger.info(
+            "Could not locate the feature extractor configuration file, will try to use the model config instead."
+        )
         return {}
 
     feature_extractor_dict = {}

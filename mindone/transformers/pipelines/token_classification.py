@@ -5,12 +5,12 @@ import warnings
 from typing import Any, Optional, Union, overload
 
 import numpy as np
-from ..tokenization_bert import BasicTokenizer
 from transformers.utils import ExplicitEnum, add_end_docstrings
 
 import mindspore as ms
 
 from ..models.auto.modeling_auto import MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES
+from ..tokenization_bert import BasicTokenizer
 from .base import ArgumentHandler, ChunkPipeline, Dataset, build_pipeline_init_args
 
 

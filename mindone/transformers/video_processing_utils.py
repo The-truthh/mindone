@@ -643,7 +643,9 @@ class BaseVideoProcessor(BaseImageProcessorFast):
                     )
                     is not None
                 ]
-                resolved_video_processor_file = resolved_video_processor_files[0] if resolved_video_processor_files else None
+                resolved_video_processor_file = (
+                    resolved_video_processor_files[0] if resolved_video_processor_files else None
+                )
             except OSError:
                 # Raise any OS error raise by `cached_file`. It will have a helpful error message adapted to
                 # the original exception.

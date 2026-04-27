@@ -425,7 +425,10 @@ def _compute_longrope_parameters(config: PretrainedConfig, seq_len: Optional[int
     # `original_max_position_embeddings` field containing the pretrained value. They use the ratio between these two
     # values to compute the default attention scaling factor, instead of using `factor`.
     original_max_position_embeddings = _get_original_max_position_embeddings(config, rope_parameters)
-    if getattr(config, "original_max_position_embeddings", None) is not None and "original_max_position_embeddings" not in rope_parameters:
+    if (
+        getattr(config, "original_max_position_embeddings", None) is not None
+        and "original_max_position_embeddings" not in rope_parameters
+    ):
         factor = config.max_position_embeddings / original_max_position_embeddings
 
     # Sets the attention factor as suggested in the paper
@@ -490,7 +493,9 @@ def _compute_llama3_parameters(config: PretrainedConfig, seq_len: Optional[int] 
     factor = rope_parameters["factor"]  # `8` in the original implementation
     low_freq_factor = rope_parameters["low_freq_factor"]  # `1` in the original implementation
     high_freq_factor = rope_parameters["high_freq_factor"]  # `4` in the original implementation
-    old_context_len = _get_original_max_position_embeddings(config, rope_parameters)  # `8192` in the original implementation
+    old_context_len = _get_original_max_position_embeddings(
+        config, rope_parameters
+    )  # `8192` in the original implementation
 
     low_freq_wavelen = old_context_len / low_freq_factor
     high_freq_wavelen = old_context_len / high_freq_factor
@@ -695,7 +700,9 @@ def _validate_longrope_parameters(config: PretrainedConfig, ignore_keys: Optiona
 
     attention_factor = rope_scaling.get("attention_factor")
     if attention_factor is not None and (not isinstance(attention_factor, float) or attention_factor < 0.0):
-        logger.warning(f"`rope_scaling`'s attention_factor field must be a float greater than 0, got {attention_factor}")
+        logger.warning(
+            f"`rope_scaling`'s attention_factor field must be a float greater than 0, got {attention_factor}"
+        )
 
 
 def _validate_llama3_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):

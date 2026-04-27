@@ -25,7 +25,6 @@ import json
 import os
 import sys
 import typing
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, TypedDict, TypeVar, Union
@@ -53,7 +52,6 @@ from transformers.tokenization_utils_base import (
     TextInput,
     TruncationStrategy,
 )
-
 from transformers.utils import (
     AUDIO_TOKENIZER_NAME,
     CHAT_TEMPLATE_DIR,
@@ -74,6 +72,7 @@ from .utils import TensorType
 def is_remote_url(url_or_filename):
     """Check if the given URL is a remote URL."""
     return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
+
 
 logger = logging.get_logger(__name__)
 
@@ -154,6 +153,7 @@ def _get_modality_for_attribute(attribute_name: str) -> str:
         f"Cannot determine modality for attribute '{attribute_name}'. "
         f"Attribute name must contain one of: {list(MODALITY_TO_BASE_CLASS_MAPPING.keys())}"
     )
+
 
 if sys.version_info >= (3, 11):
     Unpack = typing.Unpack
@@ -863,7 +863,9 @@ class ProcessorMixin(PushToHubMixin):
                 logger.info(f"chat template saved in {output_chat_template_file_jinja}")
             elif legacy_serialization:
                 # Legacy format for single templates: Put them in chat_template.json.
-                chat_template_json_string = json.dumps({"chat_template": self.chat_template}, indent=2, sort_keys=True) + "\n"
+                chat_template_json_string = (
+                    json.dumps({"chat_template": self.chat_template}, indent=2, sort_keys=True) + "\n"
+                )
                 with open(output_chat_template_file_legacy, "w", encoding="utf-8") as writer:
                     writer.write(chat_template_json_string)
                 logger.info(f"chat template saved in {output_chat_template_file_legacy}")
@@ -1534,7 +1536,9 @@ class ProcessorMixin(PushToHubMixin):
                         pretrained_model_name_or_path, subfolder=subfolder, **kwargs
                     )
                 else:
-                    tokenizer_subfolder = os.path.join(subfolder, sub_processor_type) if subfolder else sub_processor_type
+                    tokenizer_subfolder = (
+                        os.path.join(subfolder, sub_processor_type) if subfolder else sub_processor_type
+                    )
                     tokenizer = auto_processor_class.from_pretrained(
                         pretrained_model_name_or_path, subfolder=tokenizer_subfolder, **kwargs
                     )

@@ -62,6 +62,7 @@ if TYPE_CHECKING and _has_neptune:
         except importlib.metadata.PackageNotFoundError:
             _has_neptune = False
 
+
 # Integration functions:
 def is_wandb_available():
     if importlib.util.find_spec("wandb") is not None:

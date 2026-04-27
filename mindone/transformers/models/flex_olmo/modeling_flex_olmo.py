@@ -293,7 +293,9 @@ class FlexOlmoExperts(mindspore.nn.Cell):
                 2, dim=-1
             )
             current_hidden_states = self.act_fn(gate) * up
-            current_hidden_states = mindspore.mint.nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+            current_hidden_states = mindspore.mint.nn.functional.linear(
+                current_hidden_states, self.down_proj[expert_idx]
+            )
             current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
             final_hidden_states.index_add_(0, token_idx, current_hidden_states.astype(final_hidden_states.dtype))
 

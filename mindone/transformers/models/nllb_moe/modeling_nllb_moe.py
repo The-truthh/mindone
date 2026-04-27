@@ -495,8 +495,12 @@ class NllbMoeSparseMLP(mindspore.nn.Cell):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
 
         hidden_states = hidden_states.reshape((batch_size * sequence_length), hidden_dim)
-        top_1_mask, router_probs = self.router(hidden_states.reshape(batch_size, sequence_length, hidden_dim), padding_mask)
-        hidden_states = self.experts(hidden_states, top_1_mask, router_probs).reshape(batch_size, sequence_length, hidden_dim)
+        top_1_mask, router_probs = self.router(
+            hidden_states.reshape(batch_size, sequence_length, hidden_dim), padding_mask
+        )
+        hidden_states = self.experts(hidden_states, top_1_mask, router_probs).reshape(
+            batch_size, sequence_length, hidden_dim
+        )
 
         top_1_expert_index = mindspore.mint.argmax(top_1_mask, dim=-1)
         return hidden_states, (router_probs, top_1_expert_index)

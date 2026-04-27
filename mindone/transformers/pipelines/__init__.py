@@ -21,17 +21,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union, overload
 
 from huggingface_hub import is_offline_mode, model_info
+from transformers import PreTrainedTokenizer
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers import PreTrainedTokenizer
-from transformers.utils import (
-    CONFIG_NAME,
-    cached_file,
-    extract_commit_hash,
-    is_kenlm_available,
-    logging,
-)
+from transformers.utils import CONFIG_NAME, cached_file, extract_commit_hash, is_kenlm_available, logging
 
 from mindone.transformers.models.auto.feature_extraction_auto import AutoFeatureExtractor
 from mindone.transformers.models.auto.image_processing_auto import AutoImageProcessor

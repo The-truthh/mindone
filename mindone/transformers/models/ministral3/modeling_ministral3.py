@@ -8,11 +8,11 @@
 # with modifications to run transformers on mindspore.
 
 from collections.abc import Callable
-from typing import Optional
+
+from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 import mindspore as ms
-from mindspore import mint, nn
-from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
+from mindspore import mint
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache
@@ -313,9 +313,7 @@ class Ministral3RotaryEmbedding(ms.nn.Cell):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (
-            base ** (mint.arange(0, dim, 2, dtype=ms.int64).to(dtype=ms.float32) / dim)
-        )
+        inv_freq = 1.0 / (base ** (mint.arange(0, dim, 2, dtype=ms.int64).to(dtype=ms.float32) / dim))
         return inv_freq, attention_factor
 
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
@@ -372,7 +370,9 @@ class Ministral3Model(Ministral3PreTrainedModel):
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
             cache_position = mint.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], )
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+            )
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)

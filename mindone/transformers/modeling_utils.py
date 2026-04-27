@@ -31,7 +31,6 @@ from enum import Enum
 from typing import Any, Callable, MutableMapping, Optional, Union
 
 from huggingface_hub import is_offline_mode
-
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import custom_object_save
 from transformers.safetensors_conversion import auto_conversion
@@ -70,21 +69,22 @@ def is_safetensors_available():
     """Check if safetensors is available (local detection for v5.0.0 compatibility)."""
     return _HAS_SAFETENSORS
 
-import mindspore as ms
-from mindspore import Parameter, Tensor, mint, nn, ops
-from mindspore.nn import CrossEntropyLoss, Identity
 
-from mindone.transformers.generation.configuration_utils import CompileConfig, GenerationConfig
+import mindspore as ms  # noqa: E402
+from mindspore import Parameter, Tensor, mint, nn, ops  # noqa: E402
+from mindspore.nn import CrossEntropyLoss, Identity  # noqa: E402
 
-from .activations import get_activation
-from .integrations import PeftAdapterMixin
-from .integrations.accelerate import find_tied_parameters
-from .integrations.flash_attention import flash_attention_forward
-from .integrations.flash_paged import paged_attention_forward
-from .integrations.sdpa_attention import sdpa_attention_forward
-from .loss.loss_utils import LOSS_MAPPING
-from .mindspore_adapter import dtype_to_str
-from .mindspore_utils import (  # noqa: F401
+from mindone.transformers.generation.configuration_utils import CompileConfig, GenerationConfig  # noqa: E402
+
+from .activations import get_activation  # noqa: E402
+from .integrations import PeftAdapterMixin  # noqa: E402
+from .integrations.accelerate import find_tied_parameters  # noqa: E402
+from .integrations.flash_attention import flash_attention_forward  # noqa: E402
+from .integrations.flash_paged import paged_attention_forward  # noqa: E402
+from .integrations.sdpa_attention import sdpa_attention_forward  # noqa: E402
+from .loss.loss_utils import LOSS_MAPPING  # noqa: E402
+from .mindspore_adapter import dtype_to_str  # noqa: E402
+from .mindspore_utils import (  # noqa: F401,E402; noqa: E402
     Conv1D,
     apply_chunking_to_forward,
     find_pruneable_heads_and_indices,
@@ -92,9 +92,9 @@ from .mindspore_utils import (  # noqa: F401
     prune_layer,
     prune_linear_layer,
 )
-from .modeling_attn_mask_utils import dtype_to_min
-from .utils.generic import _CAN_RECORD_REGISTRY, OutputRecorder
-from .utils.import_utils import is_sdpa_available
+from .modeling_attn_mask_utils import dtype_to_min  # noqa: E402
+from .utils.generic import _CAN_RECORD_REGISTRY, OutputRecorder  # noqa: E402
+from .utils.import_utils import is_sdpa_available  # noqa: E402
 
 if _HAS_SAFETENSORS:
     from mindone.safetensors.mindspore import load_file as safe_load_file
@@ -626,9 +626,7 @@ def _get_resolved_checkpoint_files(
                         is_sharded = True
                 if resolved_archive_file is None:
                     # v5.0.0: TF/Flax loading is no longer supported
-                    if variant is not None and has_file(
-                        pretrained_model_name_or_path, WEIGHTS_NAME, **has_file_kwargs
-                    ):
+                    if variant is not None and has_file(pretrained_model_name_or_path, WEIGHTS_NAME, **has_file_kwargs):
                         raise EnvironmentError(
                             f"{pretrained_model_name_or_path} does not appear to have a file named"
                             f" {_add_variant(WEIGHTS_NAME, variant)} but there is a file without the variant"
@@ -3447,9 +3445,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
 
         tied_weights = getattr(self, "_tied_weights_keys", None)
         if isinstance(tied_weights, dict):
-            missing_keys = [
-                key for key in missing_keys if key not in tied_weights or tied_weights[key] in missing_keys
-            ]
+            missing_keys = [key for key in missing_keys if key not in tied_weights or tied_weights[key] in missing_keys]
 
         # Note: only the unexpected keys should remove the added prefix here, to correctly display the original name
         # in the warnings. For missing keys, we should show the prefix in the warning as it's part of the final model

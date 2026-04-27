@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from transformers.models.qwen2_vl import Qwen2VLConfig, Qwen2VLTextConfig
+from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig  # v5.0.0 compatible
 from transformers.utils import (
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
@@ -49,8 +50,6 @@ from mindone.transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from mindone.transformers.modeling_utils import PreTrainedModel
 from mindone.transformers.processing_utils import Unpack
 from mindone.transformers.utils import TransformersKwargs
-
-from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig  # v5.0.0 compatible
 
 logger = logging.get_logger(__name__)
 

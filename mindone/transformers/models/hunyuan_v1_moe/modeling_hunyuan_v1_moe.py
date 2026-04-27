@@ -293,7 +293,9 @@ class HunYuanMoEV1Moe(nn.Cell):
         routing_weights = mint.functional.softmax(hidden_states, dim=1, dtype=ms.float32)
         routing_weights, selected_experts = mint.topk(routing_weights, self.top_k, dim=-1)
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = mint.zeros_like(hidden_states, dtype=ms.float32).scatter_(1, selected_experts, routing_weights)
+        routing_weights = mint.zeros_like(hidden_states, dtype=ms.float32).scatter_(
+            1, selected_experts, routing_weights
+        )
         return selected_experts, routing_weights.to(hidden_states.dtype)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:

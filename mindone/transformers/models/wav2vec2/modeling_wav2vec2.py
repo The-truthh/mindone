@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """MindSpore Wav2Vec2 model."""
+import importlib
 import math
 import warnings
 from dataclasses import dataclass
@@ -25,21 +26,22 @@ import numpy as np
 from transformers.models.wav2vec2.configuration_wav2vec2 import Wav2Vec2Config
 from transformers.utils import ModelOutput, cached_file, logging
 
-import importlib
 import mindspore as ms
 
 
 def is_safetensors_available():
     """Check if safetensors is available."""
     return importlib.util.find_spec("safetensors") is not None
-from mindspore import Parameter, mint, nn
-from mindspore.common.initializer import Constant, HeNormal, Normal, One, Uniform, Zero, initializer
-from mindspore.mint.nn import CrossEntropyLoss
 
-from ....safetensors.mindspore import load_file as safe_load_file
-from ...activations import ACT2FN
-from ...modeling_attn_mask_utils import dtype_to_min
-from ...modeling_outputs import (
+
+from mindspore import Parameter, mint, nn  # noqa: E402
+from mindspore.common.initializer import Constant, HeNormal, Normal, One, Uniform, Zero, initializer  # noqa: E402
+from mindspore.mint.nn import CrossEntropyLoss  # noqa: E402
+
+from ....safetensors.mindspore import load_file as safe_load_file  # noqa: E402
+from ...activations import ACT2FN  # noqa: E402
+from ...modeling_attn_mask_utils import dtype_to_min  # noqa: E402
+from ...modeling_outputs import (  # noqa: E402
     BaseModelOutput,
     CausalLMOutput,
     MaskedLMOutput,
@@ -48,7 +50,7 @@ from ...modeling_outputs import (
     Wav2Vec2BaseModelOutput,
     XVectorOutput,
 )
-from ...modeling_utils import MSPreTrainedModel
+from ...modeling_utils import MSPreTrainedModel  # noqa: E402
 
 WAV2VEC2_ADAPTER_PT_FILE = "adapter.{}.bin"
 WAV2VEC2_ADAPTER_SAFE_FILE = "adapter.{}.safetensors"

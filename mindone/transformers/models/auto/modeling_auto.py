@@ -1508,9 +1508,7 @@ if version.parse(transformers.__version__) >= version.parse("4.57.0"):
 if version.parse(transformers.__version__) >= version.parse("5.0.0"):
     MODEL_MAPPING_NAMES.update({"ministral3": "Ministral3Model"})
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.update({"ministral3": "Ministral3ForCausalLM"})
-    MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.update(
-        {"ministral3": "Ministral3ForSequenceClassification"}
-    )
+    MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES.update({"ministral3": "Ministral3ForSequenceClassification"})
     MODEL_FOR_QUESTION_ANSWERING_MAPPING_NAMES.update({"ministral3": "Ministral3ForQuestionAnswering"})
     MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES.update({"ministral3": "Ministral3ForTokenClassification"})
 

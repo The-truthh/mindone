@@ -19,6 +19,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
+
 try:
     from transformers.configuration_utils import PreTrainedConfig
 except ImportError:

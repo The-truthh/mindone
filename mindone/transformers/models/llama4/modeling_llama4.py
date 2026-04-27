@@ -963,8 +963,7 @@ class Llama4VisionRotaryEmbedding(nn.Cell):
         frequencies_y = img_idx // idx  # get the coordinates of the 2d matrix along y
         freq_dim = config.hidden_size // config.num_attention_heads // 2
         rope_freq = 1.0 / (
-            config.rope_parameters["rope_theta"]
-            ** (mint.arange(0, freq_dim, 2)[: (freq_dim // 2)].float() / freq_dim)
+            config.rope_parameters["rope_theta"] ** (mint.arange(0, freq_dim, 2)[: (freq_dim // 2)].float() / freq_dim)
         )
         freqs_x = ((frequencies_x + 1)[..., None] * rope_freq[None, None, :]).repeat_interleave(2, dim=-1)
         freqs_y = ((frequencies_y + 1)[..., None] * rope_freq[None, None, :]).repeat_interleave(2, dim=-1)

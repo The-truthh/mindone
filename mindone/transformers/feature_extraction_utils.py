@@ -26,24 +26,24 @@ from collections import UserDict
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 import numpy as np
-from transformers.dynamic_module_utils import custom_object_save
-
-from transformers.utils import (
-    FEATURE_EXTRACTOR_NAME,
-    PROCESSOR_NAME,
-    PushToHubMixin,
-    copy_func,
-    logging,
-)
-from transformers.utils.hub import cached_file
 from huggingface_hub import is_offline_mode
+from transformers.dynamic_module_utils import custom_object_save
+from transformers.utils import FEATURE_EXTRACTOR_NAME, PROCESSOR_NAME, PushToHubMixin, copy_func, logging
+from transformers.utils.hub import cached_file
 
 
 def is_remote_url(url_or_filename):
     """Check if the given URL is a remote URL."""
     return url_or_filename.startswith("http://") or url_or_filename.startswith("https://")
 
-from .utils import TensorType, is_mindspore_available, is_mindspore_tensor, is_numpy_array, requires_backends
+
+from .utils import (  # noqa: E402
+    TensorType,
+    is_mindspore_available,
+    is_mindspore_tensor,
+    is_numpy_array,
+    requires_backends,
+)
 
 if TYPE_CHECKING:
     from .feature_extraction_sequence_utils import SequenceFeatureExtractor

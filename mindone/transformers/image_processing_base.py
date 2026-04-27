@@ -24,14 +24,7 @@ from typing import Any, Optional, TypeVar, Union
 import numpy as np
 from huggingface_hub import create_repo, is_offline_mode
 from transformers.dynamic_module_utils import custom_object_save
-
-from transformers.utils import (
-    IMAGE_PROCESSOR_NAME,
-    PROCESSOR_NAME,
-    PushToHubMixin,
-    copy_func,
-    logging,
-)
+from transformers.utils import IMAGE_PROCESSOR_NAME, PROCESSOR_NAME, PushToHubMixin, copy_func, logging
 from transformers.utils.hub import cached_file
 
 from .feature_extraction_utils import BatchFeature as BaseBatchFeature

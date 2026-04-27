@@ -81,7 +81,7 @@ class Trie:
         while start < len(text):
             matched_len = self._match_node(text[start:])
             if matched_len:
-                results.append(text[start:start + matched_len])
+                results.append(text[start : start + matched_len])
                 start += matched_len
             else:
                 results.append(text[start])
@@ -137,12 +137,13 @@ class ExtensionsTrie(Trie):
                 tokens.extend([token + subtoken for subtoken in subtokens])
         return tokens
 
-import mindspore as ms
-import mindspore.mint.distributed as dist
-import mindspore.numpy as mnp
-from mindspore import mint, ops
 
-from mindone.transformers.cache_utils import (
+import mindspore as ms  # noqa: E402
+import mindspore.mint.distributed as dist  # noqa: E402
+import mindspore.numpy as mnp  # noqa: E402
+from mindspore import mint, ops  # noqa: E402
+
+from mindone.transformers.cache_utils import (  # noqa: E402
     Cache,
     DynamicCache,
     EncoderDecoderCache,
@@ -152,7 +153,7 @@ from mindone.transformers.cache_utils import (
     SlidingWindowCache,
     StaticCache,
 )
-from mindone.transformers.generation.candidate_generator import (
+from mindone.transformers.generation.candidate_generator import (  # noqa: E402
     AssistantVocabTranslatorCache,
     AssistedCandidateGenerator,
     AssistedCandidateGeneratorDifferentTokenizers,
@@ -163,14 +164,14 @@ from mindone.transformers.generation.candidate_generator import (
     _prepare_attention_mask,
     _prepare_token_type_ids,
 )
-from mindone.transformers.generation.configuration_utils import (
+from mindone.transformers.generation.configuration_utils import (  # noqa: E402
     ALL_STATIC_CACHE_IMPLEMENTATIONS,
     DEPRECATED_STATIC_CACHE_IMPLEMENTATIONS,
     STATIC_CACHE_IMPLEMENTATIONS,
     GenerationConfig,
     GenerationMode,
 )
-from mindone.transformers.generation.logits_process import (
+from mindone.transformers.generation.logits_process import (  # noqa: E402
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
     EpsilonLogitsWarper,
@@ -198,7 +199,7 @@ from mindone.transformers.generation.logits_process import (
     TypicalLogitsWarper,
     UnbatchedClassifierFreeGuidanceLogitsProcessor,
 )
-from mindone.transformers.generation.stopping_criteria import (
+from mindone.transformers.generation.stopping_criteria import (  # noqa: E402
     ConfidenceCriteria,
     EosTokenCriteria,
     MaxLengthCriteria,
@@ -207,10 +208,10 @@ from mindone.transformers.generation.stopping_criteria import (
     StoppingCriteriaList,
     StopStringCriteria,
 )
-from mindone.transformers.masking_utils import create_masks_for_generate
-from mindone.transformers.mindspore_adapter.paged_attention_block_tables import BlockTables
-from mindone.transformers.mindspore_adapter.select_operator import get_multinomial_op
-from mindone.transformers.utils import TransformersKwargs
+from mindone.transformers.masking_utils import create_masks_for_generate  # noqa: E402
+from mindone.transformers.mindspore_adapter.paged_attention_block_tables import BlockTables  # noqa: E402
+from mindone.transformers.mindspore_adapter.select_operator import get_multinomial_op  # noqa: E402
+from mindone.transformers.utils import TransformersKwargs  # noqa: E402
 
 if TYPE_CHECKING:
     from transformers.generation.streamers import BaseStreamer
@@ -869,7 +870,9 @@ class GenerationMixin:
         for possible_cache_name in ALL_CACHE_NAMES:
             if possible_cache_name in outputs:
                 past_key_values = getattr(outputs, possible_cache_name)
-                cache_name = "past_key_values" if possible_cache_name in ("past_buckets_states", "mems") else possible_cache_name
+                cache_name = (
+                    "past_key_values" if possible_cache_name in ("past_buckets_states", "mems") else possible_cache_name
+                )
                 break
 
         # Bloom fix: standardizes the cache format when requested
@@ -2017,7 +2020,9 @@ class GenerationMixin:
                     if key.startswith("_") or key == "transformers_version":
                         continue
                     model_value = model_generation_config_dict.get(key, None)
-                    if current_value == global_defaults.get(key, None) and model_value != global_defaults.get(key, None):
+                    if current_value == global_defaults.get(key, None) and model_value != global_defaults.get(
+                        key, None
+                    ):
                         modified_values[key] = model_value
 
                 generation_config.update(**model_generation_config_dict, defaults_only=True, allow_custom_entries=True)
@@ -2261,23 +2266,15 @@ class GenerationMixin:
                         "This model does not support the quantized cache. If you want your model to support quantized "
                         "cache, please open an issue and tag @zucchini-nlp."
                     )
-                raise ValueError(
-                    "`cache_implementation='quantized'` is not implemented in MindOne generation yet."
-                )
+                raise ValueError("`cache_implementation='quantized'` is not implemented in MindOne generation yet.")
             elif generation_config.cache_implementation == "offloaded":
                 if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
-                    raise ValueError(
-                        "This model does not support the offloaded cache in generation."
-                    )
-                raise ValueError(
-                    "`cache_implementation='offloaded'` is not implemented in MindOne generation yet."
-                )
+                    raise ValueError("This model does not support the offloaded cache in generation.")
+                raise ValueError("`cache_implementation='offloaded'` is not implemented in MindOne generation yet.")
             elif "dynamic" in generation_config.cache_implementation:
                 model_kwargs[cache_name] = DynamicCache(**dynamic_cache_kwargs)
             else:
-                raise ValueError(
-                    f"Unsupported `cache_implementation`: {generation_config.cache_implementation!r}."
-                )
+                raise ValueError(f"Unsupported `cache_implementation`: {generation_config.cache_implementation!r}.")
 
         # TODO (joao): this logic is incomplete, e.g. `offloaded` should apply to both caches. Refactor this function
         # to correctly pass parameterization to both caches.
@@ -3981,7 +3978,9 @@ class GenerationMixin:
             hasattr(candidate_generator, "assistant_generation_config")
             and candidate_generator.assistant_generation_config.num_assistant_tokens_schedule == "heuristic"
         ):
-            candidate_generator.assistant_generation_config.num_assistant_tokens = candidate_generator.num_assistant_tokens
+            candidate_generator.assistant_generation_config.num_assistant_tokens = (
+                candidate_generator.num_assistant_tokens
+            )
         if return_dict_in_generate:
             cache = model_kwargs.get(self._get_cache_name(model_kwargs))
             if self.config.is_encoder_decoder:
@@ -4042,7 +4041,11 @@ class GenerationMixin:
 
             for possible_cache_name in ALL_CACHE_NAMES:
                 if possible_cache_name in outputs:
-                    cache_name = "past_key_values" if possible_cache_name in ("past_buckets_states", "mems") else possible_cache_name
+                    cache_name = (
+                        "past_key_values"
+                        if possible_cache_name in ("past_buckets_states", "mems")
+                        else possible_cache_name
+                    )
                     model_kwargs[cache_name] = getattr(outputs, possible_cache_name)
                     break
             past_length = current_length

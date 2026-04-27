@@ -34,20 +34,25 @@ class EvaluationStrategy(Enum):
     Enum for evaluation strategy (transformers v5.0.0 compatible).
     Previously available in transformers.trainer_utils, now defined locally.
     """
+
     NO = "no"
     STEPS = "steps"
     EPOCH = "epoch"
 
-import importlib
-import mindspore as ms
+
+import importlib  # noqa: E402
+
+import mindspore as ms  # noqa: E402
 
 
 def is_safetensors_available():
     """Check if safetensors is available."""
     return importlib.util.find_spec("safetensors") is not None
-from mindspore.communication.management import get_group_size, get_rank
 
-from .mindspore_adapter.utils import _is_parallel
+
+from mindspore.communication.management import get_group_size, get_rank  # noqa: E402
+
+from .mindspore_adapter.utils import _is_parallel  # noqa: E402
 
 logger = logging.get_logger(__name__)
 log_levels = logging.get_log_levels_dict().copy()
@@ -1274,7 +1279,9 @@ class TrainingArguments:
                 FutureWarning,
             )
             if self.hub_token is not None:
-                raise ValueError("Both `hub_token` and deprecated `push_to_hub_token` were provided. Please use only `hub_token`.")
+                raise ValueError(
+                    "Both `hub_token` and deprecated `push_to_hub_token` were provided. Please use only `hub_token`."
+                )
             self.hub_token = self.push_to_hub_token
 
         if self.push_to_hub_model_id is not None:
