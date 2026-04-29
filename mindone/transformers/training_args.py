@@ -764,7 +764,7 @@ class TrainingArguments:
         default=None,
         metadata={
             "help": "The backend to be used for distributed training",
-            "choices": ["nccl", "gloo", "mpi", "ccl", "hccl", "cncl"],
+            "choices": ["nccl", "gloo", "mpi", "xccl", "hccl", "cncl"],
         },
     )
     debug: Optional[str] = field(

@@ -265,3 +265,13 @@ def is_librosa_available():
 
 def is_pyctcdecode_available() -> Union[tuple[bool, str], bool]:
     return _pyctcdecode_available
+
+
+@lru_cache
+def is_hqq_available() -> bool:
+    return _is_package_available("hqq")
+
+
+@lru_cache
+def is_optimum_quanto_available() -> bool:
+    return _is_package_available("optimum.quanto")

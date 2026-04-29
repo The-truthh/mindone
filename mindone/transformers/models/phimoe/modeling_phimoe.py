@@ -626,6 +626,7 @@ class PhimoeTopKRouter(mindspore.nn.Cell):
         self.weight = mindspore.Parameter(mindspore.mint.empty((config.num_local_experts, config.hidden_size)))
         self.router_jitter_noise = config.router_jitter_noise
         self.input_jitter_noise = config.input_jitter_noise
+        self.top_k = config.num_experts_per_tok
 
     def construct(self, hidden_states: mindspore.Tensor) -> Tuple[mindspore.Tensor, mindspore.Tensor]:
         if self.training and self.input_jitter_noise > 0:
@@ -637,8 +638,8 @@ class PhimoeTopKRouter(mindspore.nn.Cell):
             router_logits,
             jitter_eps=self.router_jitter_noise,
             training=self.training,
+            top_k=self.top_k,
         )
-        routing_weights = mindspore.mint.zeros_like(router_logits).scatter(1, selected_experts, routing_weights)
         return routing_weights, selected_experts
 
 
@@ -698,6 +699,25 @@ class PhimoeRMSNorm(mindspore.nn.Cell):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
+class PhimoeLayerNorm(mindspore.nn.Cell):
+    def __init__(self, hidden_size, eps=1e-6):
+        super().__init__()
+        self.weight = mindspore.Parameter(mindspore.mint.ones(hidden_size), name="weight")
+        self.bias = mindspore.Parameter(mindspore.mint.zeros(hidden_size), name="bias")
+        self.variance_epsilon = eps
+
+    def construct(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = mindspore.mint.nn.functional.layer_norm(
+            hidden_states.float(),
+            (self.weight.shape[0],),
+            self.weight.float(),
+            self.bias.float(),
+            self.variance_epsilon,
+        )
+        return hidden_states.to(input_dtype)
+
+
 class PhimoeDecoderLayer(mindspore.nn.Cell):
     def __init__(self, config: PhimoeConfig, layer_idx: int):
         super().__init__()
@@ -706,8 +726,8 @@ class PhimoeDecoderLayer(mindspore.nn.Cell):
         self.self_attn = PHIMOE_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
 
         self.mlp = PhimoeSparseMoeBlock(config)
-        self.input_layernorm = PhimoeRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = PhimoeRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = PhimoeLayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = PhimoeLayerNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def construct(
         self,
@@ -822,7 +842,7 @@ class PhimoeModel(PhimoePreTrainedModel):
             [PhimoeDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self._attn_implementation = config._attn_implementation
-        self.norm = mindspore.mint.nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps, elementwise_affine=True)
+        self.norm = PhimoeLayerNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = PhimoeRotaryEmbedding(config=config)
 
         self.gradient_checkpointing = False

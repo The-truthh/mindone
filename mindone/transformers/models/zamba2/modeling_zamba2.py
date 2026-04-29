@@ -18,7 +18,6 @@
 """MindSpore Zamba2 model."""
 
 import math
-import re
 from itertools import cycle
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -1111,21 +1110,8 @@ class Zamba2Model(Zamba2PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = mint.nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        blocks = [Zamba2AttentionDecoderLayer(config, block_id=k) for k in range(config.num_mem_blocks)]
-        mamba_layers = []
-        linear_layers = []
         self.layers_block_type = config.layers_block_type
-        for i in range(config.num_hidden_layers):
-            if config.layers_block_type[i] == "mamba":
-                mamba_layers.append(Zamba2MambaDecoderLayer(config, layer_idx=i))
-            elif config.layers_block_type[i] == "hybrid":
-                linear_layers.append(mint.nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=False))
-                mamba_layers.append(Zamba2MambaDecoderLayer(config, layer_idx=i))
-        mamba_layers = iter(mamba_layers)
-        linear_layers = iter(linear_layers)
-        blocks = cycle(blocks)
-        layers = self.get_layers(blocks, linear_layers, mamba_layers)
-        self.layers = nn.CellList(layers)
+        self.layers = self.get_layers()
 
         self._attn_implementation = config._attn_implementation
         self.final_layernorm = Zamba2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -1301,53 +1287,36 @@ class Zamba2Model(Zamba2PreTrainedModel):
 
         return causal_mask
 
-    def get_layers(self, blocks, linear_layers, mamba_layers):
+    def get_layers(self):
         layers = []
-        self._tied_weights_keys = []
+        self._tied_weights_keys = {}
         self.first_transformer_layer_id = 0
+        unique_hybrid_blocks = []
         for layer_id, layer_type in enumerate(self.layers_block_type):
+            mamba_layer = Zamba2MambaDecoderLayer(self.config, layer_idx=layer_id)
             if layer_type == "hybrid":
                 if self.first_transformer_layer_id == 0:
                     self.first_transformer_layer_id = layer_id
-                block = next(blocks)
-                if self.config.num_mem_blocks * len(self.config.hybrid_layer_ids) > 1:
-                    prefix_pattern = rf"^layers\.{layer_id}\.shared_transformer\."
-                    main_keys_pattern = re.compile(
-                        prefix_pattern
-                        + r"(?:"
-                        + r"self_attn\.(?:q_proj|k_proj|v_proj|o_proj)\.weight|"
-                        + r"feed_forward\.(?:gate_up_proj|down_proj)\.weight|"
-                        + r"(?:input_layernorm|pre_ff_layernorm)\.weight"
-                        + r")$"
-                    )
-                    self._tied_weights_keys.append(main_keys_pattern)
+                prefix_pattern = f"layers.{layer_id}.shared_transformer"
 
-                    adapter_id = 0
-                    for _layer_type in self.layers_block_type:
-                        if _layer_type == "hybrid" and adapter_id % self.config.num_mem_blocks == block.block_id:
-                            adapter_pattern = re.compile(
-                                r"^shared_transformer\.feed_forward\.gate_up_proj_adapter_list\."
-                                + str(adapter_id)
-                                + r"\.(?:0|1)\.weight$"
-                            )
-                            self._tied_weights_keys.append(adapter_pattern)
-                        adapter_id += 1
-                    if self.config.use_shared_attention_adapter:
-                        adapter_id = 0
-                        for _layer_type in self.layers_block_type:
-                            if _layer_type == "hybrid" and adapter_id % self.config.num_mem_blocks == block.block_id:
-                                attn_adapter_pattern = re.compile(
-                                    r"^shared_transformer\.self_attn\."
-                                    + r"(?:linear_q_adapter_list|linear_k_adapter_list|linear_v_adapter_list)\."
-                                    + str(adapter_id)
-                                    + r"\.(?:0|1)\.weight$"
-                                )
-                                self._tied_weights_keys.append(attn_adapter_pattern)
-                            adapter_id += 1
-                layers.append(Zamba2HybridLayer(block, next(linear_layers), next(mamba_layers)))
+                if (
+                    not isinstance(unique_hybrid_blocks, list)
+                    or len(unique_hybrid_blocks) >= self.config.num_mem_blocks
+                ):
+                    if isinstance(unique_hybrid_blocks, list):
+                        unique_hybrid_blocks = cycle(unique_hybrid_blocks)
+                    target_pattern = next(unique_hybrid_blocks)
+                    self._tied_weights_keys.update({prefix_pattern: target_pattern})
+                else:
+                    unique_hybrid_blocks.append(prefix_pattern)
+
+                block_id = layer_id % self.config.num_mem_blocks
+                block = Zamba2AttentionDecoderLayer(self.config, block_id=block_id)
+                linear_layer = mint.nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=False)
+                layers.append(Zamba2HybridLayer(block, linear_layer, mamba_layer))
             else:
-                layers.append(next(mamba_layers))
-        return layers
+                layers.append(mamba_layer)
+        return nn.CellList(layers)
 
 
 # Adapted from transformers.models.jamba.modeling_jamba.JambaForCausalLM with Jamba->Zamba2, JAMBA->ZAMBA2

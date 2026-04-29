@@ -95,6 +95,7 @@ from .mindspore_utils import (  # noqa: F401,E402; noqa: E402
 from .modeling_attn_mask_utils import dtype_to_min  # noqa: E402
 from .utils.generic import _CAN_RECORD_REGISTRY, OutputRecorder  # noqa: E402
 from .utils.import_utils import is_sdpa_available  # noqa: E402
+from .utils.loading_report import LoadStateDictInfo, log_state_dict_report  # noqa: E402
 
 if _HAS_SAFETENSORS:
     from mindone.safetensors.mindspore import load_file as safe_load_file
@@ -2994,13 +2995,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             keep_in_fp32_modules.extend(model._keep_in_fp32_modules_strict)
 
         # v5.0.0: Load PyTorch format weights (TF/Flax support removed)
-        (
-            model,
-            missing_keys,
-            unexpected_keys,
-            mismatched_keys,
-            error_msgs,
-        ) = cls._load_pretrained_model(
+        model, loading_info = cls._load_pretrained_model(
             model,
             state_dict,
             loaded_state_dict_keys,  # XXX: rename?
@@ -3067,13 +3062,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                     pass
 
         if output_loading_info:
-            loading_info = {
-                "missing_keys": missing_keys,
-                "unexpected_keys": unexpected_keys,
-                "mismatched_keys": mismatched_keys,
-                "error_msgs": error_msgs,
-            }
-            return model, loading_info
+            return model, loading_info.to_dict()
 
         return model
 
@@ -3183,7 +3172,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         keep_in_fp32_modules=None,
         key_mapping: Optional[dict[str, str]] = None,
         weights_only: bool = True,
-    ):
+    ) -> tuple["PreTrainedModel", LoadStateDictInfo]:
         # v5.0.0: Use core loader for unified weight loading
         from .core_model_loading import convert_and_load_state_dict_in_model
 
@@ -3331,48 +3320,22 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
         missing_keys, unexpected_keys = model._adjust_missing_and_unexpected_keys(
             missing_keys, unexpected_keys, loading_task_model_from_base_state_dict
         )
+        loading_info = LoadStateDictInfo(
+            missing_keys=set(missing_keys),
+            unexpected_keys=set(unexpected_keys),
+            mismatched_keys={tuple(item) for item in mismatched_keys},
+            error_msgs=error_msgs,
+            conversion_errors={},
+        )
+        log_state_dict_report(
+            model=model,
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            ignore_mismatched_sizes=ignore_mismatched_sizes,
+            loading_info=loading_info,
+            logger=logger,
+        )
 
-        if len(error_msgs) > 0:
-            error_msg = "\n\t".join(error_msgs)
-            if "size mismatch" in error_msg:
-                error_msg += (
-                    "\n\tYou may consider adding `ignore_mismatched_sizes=True` in the model `from_pretrained` method."
-                )
-            raise RuntimeError(f"Error(s) in loading state_dict for {model.__class__.__name__}:\n\t{error_msg}")
-
-        if len(unexpected_keys) > 0:
-            archs = [] if model.config.architectures is None else model.config.architectures
-            warner = logger.warning if model.__class__.__name__ in archs else logger.info
-            warner(
-                f"Some weights of the model checkpoint at {pretrained_model_name_or_path} were not used when"
-                f" initializing {model.__class__.__name__}: {unexpected_keys}\n- This IS expected if you are"
-                f" initializing {model.__class__.__name__} from the checkpoint of a model trained on another task or"
-                " with another architecture (e.g. initializing a BertForSequenceClassification model from a"
-                " BertForPreTraining model).\n- This IS NOT expected if you are initializing"
-                f" {model.__class__.__name__} from the checkpoint of a model that you expect to be exactly identical"
-                " (initializing a BertForSequenceClassification model from a BertForSequenceClassification model)."
-            )
-        if len(missing_keys) > 0:
-            logger.warning(
-                f"Some weights of {model.__class__.__name__} were not initialized from the model checkpoint at"
-                f" {pretrained_model_name_or_path} and are newly initialized: {missing_keys}\nYou should probably"
-                " TRAIN this model on a down-stream task to be able to use it for predictions and inference."
-            )
-        if len(mismatched_keys) > 0:
-            mismatched_warning = "\n".join(
-                [
-                    f"- {key}: found shape {shape1} in the checkpoint and {shape2} in the model instantiated"
-                    for key, shape1, shape2 in mismatched_keys
-                ]
-            )
-            logger.warning(
-                f"Some weights of {model.__class__.__name__} were not initialized from the model checkpoint at"
-                f" {pretrained_model_name_or_path} and are newly initialized because the shapes did not"
-                f" match:\n{mismatched_warning}\nYou should probably TRAIN this model on a down-stream task to be able"
-                " to use it for predictions and inference."
-            )
-
-        return model, missing_keys, unexpected_keys, mismatched_keys, error_msgs
+        return model, loading_info
 
     def retrieve_modules_from_names(self, names, add_prefix=False, remove_prefix=False):
         module_keys = {".".join(key.split(".")[:-1]) for key in names}

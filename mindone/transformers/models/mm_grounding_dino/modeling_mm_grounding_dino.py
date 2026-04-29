@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from transformers import MMGroundingDinoConfig
-from transformers.file_utils import ModelOutput, is_timm_available, requires_backends
+from transformers.file_utils import ModelOutput
 
 import mindspore as ms
 from mindspore import Tensor, mint, ops
@@ -37,9 +37,6 @@ from ...mindspore_utils import meshgrid
 from ...modeling_utils import PreTrainedModel
 from ...utils.backbone_utils import load_backbone
 from ..auto.modeling_auto import AutoModel
-
-if is_timm_available():
-    from timm import create_model
 
 
 class MMGroundingDinoContrastiveEmbedding(ms.nn.Cell):
@@ -720,44 +717,25 @@ class MMGroundingDinoConvEncoder(ms.nn.Cell):
 
         self.config = config
 
-        if config.use_timm_backbone:
-            requires_backends(self, ["timm"])
-            backbone = create_model(
-                config.backbone,
-                pretrained=config.use_pretrained_backbone,
-                features_only=True,
-                **config.backbone_kwargs,
-            )
-        else:
-            backbone = load_backbone(config)
+        backbone = load_backbone(config)
 
         # replace batch norm by frozen batch norm
         replace_batch_norm(backbone)
         self.model = backbone
-        self.intermediate_channel_sizes = (
-            self.model.feature_info.channels() if config.use_timm_backbone else self.model.channels
-        )
+        self.intermediate_channel_sizes = self.model.channels
 
-        backbone_model_type = None
-        if config.backbone is not None:
-            backbone_model_type = config.backbone
-        elif config.backbone_config is not None:
-            backbone_model_type = config.backbone_config.model_type
-        else:
+        if config.backbone_config is None:
             raise ValueError("Either `backbone` or `backbone_config` should be provided in the config")
+        backbone_model_type = config.backbone_config.model_type
 
         if "resnet" in backbone_model_type:
-            for name, parameter in self.model.named_parameters():
-                if config.use_timm_backbone:
-                    if "layer2" not in name and "layer3" not in name and "layer4" not in name:
-                        parameter.requires_grad_(False)
-                else:
-                    if "stage.1" not in name and "stage.2" not in name and "stage.3" not in name:
-                        parameter.requires_grad_(False)
+            for name, parameter in self.model.parameters_and_names():
+                if "stage.1" not in name and "stage.2" not in name and "stage.3" not in name:
+                    parameter.requires_grad = False
 
     def construct(self, pixel_values: ms.Tensor, pixel_mask: ms.Tensor):
         # send pixel_values through the model to get list of feature maps
-        features = self.model(pixel_values) if self.config.use_timm_backbone else self.model(pixel_values).feature_maps
+        features = self.model(pixel_values, return_dict=True).feature_maps
 
         out = []
         for feature_map in features:

@@ -2098,7 +2098,7 @@ class GenerationMixin:
         model_kwargs["cache_position"] = cache_position
         return model_kwargs
 
-    def _get_cache(
+    def _prepare_static_cache(
         self, cache_implementation: str, batch_size: int, max_cache_len: int, model_kwargs
     ) -> tuple[tuple[ms.Tensor, ms.Tensor]]:
         """
@@ -2107,13 +2107,10 @@ class GenerationMixin:
 
         Returns the resulting cache object.
         """
-        requires_cross_attention_cache = (
-            self.config.is_encoder_decoder or model_kwargs.get("encoder_outputs") is not None
-        )
         offload_cache = "offloaded" in cache_implementation
 
         if hasattr(self, "_cache"):
-            cache_to_check = self._cache.self_attention_cache if requires_cross_attention_cache else self._cache
+            cache_to_check = self._cache.self_attention_cache if self.config.is_encoder_decoder else self._cache
 
         if cache_implementation == "sliding_window":
             max_cache_len = min(self.config.sliding_window, max_cache_len)
@@ -2125,7 +2122,7 @@ class GenerationMixin:
             or cache_to_check.max_cache_len < max_cache_len
         )
 
-        if requires_cross_attention_cache and hasattr(self, "_cache"):
+        if self.config.is_encoder_decoder and hasattr(self, "_cache"):
             need_new_cache = (
                 need_new_cache
                 or self._cache.cross_attention_cache.max_cache_len != model_kwargs["encoder_outputs"][0].shape[1]
@@ -2138,7 +2135,7 @@ class GenerationMixin:
                 "offloading": offload_cache,
             }
             self._cache = StaticCache(**self_attention_cache_kwargs)
-            if requires_cross_attention_cache:
+            if self.config.is_encoder_decoder:
                 cross_attention_cache_kwargs = {
                     "config": self.config.get_text_config(decoder=True),
                     "max_cache_len": model_kwargs["encoder_outputs"][0].shape[1],
@@ -2148,6 +2145,9 @@ class GenerationMixin:
         else:
             self._cache.reset()
         return self._cache
+
+    def _get_cache(self, cache_implementation: str, batch_size: int, max_cache_len: int, model_kwargs):
+        return self._prepare_static_cache(cache_implementation, batch_size, max_cache_len, model_kwargs)
 
     def _supports_default_dynamic_cache(self) -> bool:
         """
@@ -2185,10 +2185,6 @@ class GenerationMixin:
         """
         cache_name = self._get_cache_name()
 
-        requires_cross_attention_cache = (
-            self.config.is_encoder_decoder or model_kwargs.get("encoder_outputs") is not None
-        )
-
         # Quick escape route 1: if the user specifies a cache, we only need to check for conflicting `generate`
         # arguments.
         user_defined_cache = model_kwargs.get(cache_name)
@@ -2221,65 +2217,60 @@ class GenerationMixin:
 
         # Otherwise we NEED to prepare a cache class, based on `generation_config.cache_implementation`
 
-        # TODO(joao): support static caches in assisted generation. assisted generation needs to roll back caches,
-        # which is only supported in dynamic caches atm
-        if generation_mode == GenerationMode.ASSISTED_GENERATION and generation_config.cache_implementation is not None:
-            logger.warning_once(
-                "An assistant model is provided, using a dynamic cache instead of a cache of type="
-                f"'{generation_config.cache_implementation}'."
-            )
-            generation_config.cache_implementation = None
-
         # Assisted decoding and contrastive search require cache rollback, which is incompatible with sliding layers.
         # To handle this, we skip passing the model config to DynamicCache (forcing a full-layer cache).
         # The "dynamic_full" option is a shortcut for generate() users to avoid sliding layers on their own.
-        if (
-            generation_mode in (GenerationMode.ASSISTED_GENERATION, GenerationMode.CONTRASTIVE_SEARCH)
-            or generation_config.cache_implementation == "dynamic_full"
-        ):
-            dynamic_cache_kwargs = {}
-        else:
-            dynamic_cache_kwargs = {"config": self.config.get_text_config(decoder=True)}
-        if generation_config.cache_implementation is not None:
-            if generation_config.cache_implementation in ALL_STATIC_CACHE_IMPLEMENTATIONS:
-                if generation_config.cache_implementation in DEPRECATED_STATIC_CACHE_IMPLEMENTATIONS:
-                    logger.warning_once(
-                        f"Using `cache_implementation='{generation_config.cache_implementation}' is deprecated. "
-                        f"Please only use one of {STATIC_CACHE_IMPLEMENTATIONS}, and the layer structure will be "
-                        "inferred automatically."
-                    )
-                model_kwargs[cache_name] = self._get_cache(
-                    cache_implementation=generation_config.cache_implementation,
-                    batch_size=max(generation_config.num_beams or 1, generation_config.num_return_sequences or 1)
-                    * batch_size,
-                    max_cache_len=max_cache_length,
-                    model_kwargs=model_kwargs,
+        if generation_mode in (GenerationMode.ASSISTED_GENERATION, GenerationMode.CONTRASTIVE_SEARCH):
+            if generation_config.cache_implementation is not None:
+                logger.warning_once(
+                    "An assistant model is provided, using a dynamic cache instead of a cache of type="
+                    f"'{generation_config.cache_implementation}'."
                 )
-            elif generation_config.cache_implementation == "quantized":
-                if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
-                    raise ValueError(
-                        "This model does not support the quantized cache. If you want your model to support quantized "
-                        "cache, please open an issue and tag @zucchini-nlp."
-                    )
-                if not self._supports_quantized_cache:
-                    raise ValueError(
-                        "This model does not support the quantized cache. If you want your model to support quantized "
-                        "cache, please open an issue and tag @zucchini-nlp."
-                    )
-                raise ValueError("`cache_implementation='quantized'` is not implemented in MindOne generation yet.")
-            elif generation_config.cache_implementation == "offloaded":
-                if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
-                    raise ValueError("This model does not support the offloaded cache in generation.")
-                raise ValueError("`cache_implementation='offloaded'` is not implemented in MindOne generation yet.")
-            elif "dynamic" in generation_config.cache_implementation:
-                model_kwargs[cache_name] = DynamicCache(**dynamic_cache_kwargs)
-            else:
-                raise ValueError(f"Unsupported `cache_implementation`: {generation_config.cache_implementation!r}.")
+            generation_config.cache_implementation = "dynamic_full"
 
-        # TODO (joao): this logic is incomplete, e.g. `offloaded` should apply to both caches. Refactor this function
-        # to correctly pass parameterization to both caches.
+        dynamic_cache_kwargs = {}
+        if generation_config.cache_implementation != "dynamic_full":
+            dynamic_cache_kwargs = {"config": self.config.get_text_config(decoder=True)}
+
+        if generation_config.cache_implementation in ALL_STATIC_CACHE_IMPLEMENTATIONS:
+            if generation_config.cache_implementation in DEPRECATED_STATIC_CACHE_IMPLEMENTATIONS:
+                logger.warning_once(
+                    f"Using `cache_implementation='{generation_config.cache_implementation}' is deprecated and will be "
+                    f"removed in v5.13. Please only use one of {STATIC_CACHE_IMPLEMENTATIONS}, and the layer structure "
+                    "will be inferred automatically."
+                )
+            model_kwargs[cache_name] = self._prepare_static_cache(
+                cache_implementation=generation_config.cache_implementation,
+                batch_size=max(generation_config.num_beams or 1, generation_config.num_return_sequences or 1)
+                * batch_size,
+                max_cache_len=max_cache_length,
+                model_kwargs=model_kwargs,
+            )
+        elif generation_config.cache_implementation == "quantized":
+            if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
+                raise ValueError(
+                    "This model does not support the quantized cache. If you want your model to support quantized "
+                    "cache, please open an issue and tag @zucchini-nlp."
+                )
+            if not self._supports_quantized_cache:
+                raise ValueError(
+                    "This model does not support the quantized cache. If you want your model to support quantized "
+                    "cache, please open an issue and tag @zucchini-nlp."
+                )
+            raise ValueError("`cache_implementation='quantized'` is not implemented in MindOne generation yet.")
+        elif generation_config.cache_implementation == "offloaded":
+            if self.config.is_encoder_decoder or not self._supports_default_dynamic_cache():
+                raise ValueError("This model does not support the offloaded cache in generation.")
+            raise ValueError("`cache_implementation='offloaded'` is not implemented in MindOne generation yet.")
+        elif generation_config.cache_implementation is None:
+            pass
+        elif "dynamic" in generation_config.cache_implementation:
+            model_kwargs[cache_name] = DynamicCache(**dynamic_cache_kwargs)
+        else:
+            raise ValueError(f"Unsupported `cache_implementation`: {generation_config.cache_implementation!r}.")
+
         if (
-            requires_cross_attention_cache
+            self.config.is_encoder_decoder
             and cache_name == "past_key_values"
             and model_kwargs.get("past_key_values") is not None
             and not isinstance(model_kwargs["past_key_values"], EncoderDecoderCache)

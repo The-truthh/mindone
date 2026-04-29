@@ -716,7 +716,7 @@ class DPTReassembleStage(nn.Cell):
 
 
 def _get_backbone_hidden_size(config):
-    if config.backbone_config is not None and config.is_hybrid is False:
+    if config.backbone_config is not None and hasattr(config.backbone_config, "hidden_size"):
         return config.backbone_config.hidden_size
     else:
         return config.hidden_size
@@ -1102,7 +1102,7 @@ class DPTForDepthEstimation(DPTPreTrainedModel):
         super().__init__(config)
 
         self.backbone = None
-        if config.is_hybrid is False and (config.backbone_config is not None or config.backbone is not None):
+        if config.is_hybrid is False and config.backbone_config is not None:
             backbone_config = getattr(config, "backbone_config", None)
             self.backbone = BitBackbone(backbone_config).set_train(False)
         else:

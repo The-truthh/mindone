@@ -159,12 +159,8 @@ def to_py_obj(obj):
     elif isinstance(obj, (dict, UserDict)):
         return {k: to_py_obj(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
-        try:
-            arr = np.array(obj)
-            if np.issubdtype(arr.dtype, np.integer) or np.issubdtype(arr.dtype, np.floating):
-                return arr.tolist()
-        except Exception:
-            pass
+        if all(isinstance(x, (int, float, np.number)) for x in obj):
+            return list(obj)
         return [to_py_obj(o) for o in obj]
 
     # This gives us a smart order to test the frameworks with the corresponding tests.
