@@ -3253,14 +3253,15 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 prefix,
             )
             # v5.0.0: Use core loader for unified loading interface
-            _, _, _, _, conversion_errors = convert_and_load_state_dict_in_model(
+            core_loading_info, _ = convert_and_load_state_dict_in_model(
                 model_to_load,
                 state_dict,
                 ignore_mismatched_sizes=ignore_mismatched_sizes,
                 start_prefix=start_prefix,
                 is_sharded=False,
             )
-            error_msgs = list(conversion_errors)
+            conversion_errors = dict(core_loading_info.conversion_errors)
+            error_msgs = list(core_loading_info.error_msgs)
         else:
             # Sharded checkpoint or whole but low_cpu_mem_usage==True
 
@@ -3269,6 +3270,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 resolved_archive_file = [resolved_archive_file]
 
             error_msgs = []
+            conversion_errors = {}
             mismatched_keys = []
 
             if len(resolved_archive_file) > 1:
@@ -3303,14 +3305,15 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
                 )
 
                 # v5.0.0: Use core loader for unified loading interface
-                _, _, _, _, conversion_errors = convert_and_load_state_dict_in_model(
+                core_loading_info, _ = convert_and_load_state_dict_in_model(
                     model_to_load,
                     state_dict,
                     ignore_mismatched_sizes=ignore_mismatched_sizes,
                     start_prefix=start_prefix,
                     is_sharded=True,
                 )
-                error_msgs += list(conversion_errors)
+                error_msgs += list(core_loading_info.error_msgs)
+                conversion_errors.update(core_loading_info.conversion_errors)
 
                 # force memory release
                 del state_dict
@@ -3325,7 +3328,7 @@ class PreTrainedModel(nn.Cell, EmbeddingAccessMixin, ModuleUtilsMixin, PushToHub
             unexpected_keys=set(unexpected_keys),
             mismatched_keys={tuple(item) for item in mismatched_keys},
             error_msgs=error_msgs,
-            conversion_errors={},
+            conversion_errors=conversion_errors,
         )
         log_state_dict_report(
             model=model,
@@ -3947,6 +3950,21 @@ class AttentionInterface(MutableMapping):
     @classmethod
     def register(cls, key: str, value: Callable):
         cls._global_mapping.update({key: value})
+
+    def get_interface(self, attn_implementation: str, default: Callable) -> Callable:
+        """Return the requested attention implementation and reject unknown registered names."""
+        if attn_implementation is None:
+            logger.warning_once(
+                "You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This "
+                "is expected if you use an Attention Module as a standalone Module. If this is not the case, something "
+                "went wrong with the dispatch of `config._attn_implementation`."
+            )
+        elif attn_implementation != "eager" and attn_implementation not in self:
+            raise KeyError(
+                f"`{attn_implementation}` is not a valid attention implementation registered in the "
+                "`AttentionInterface`"
+            )
+        return self.get(attn_implementation, default)
 
     def valid_keys(self) -> list[str]:
         return list(self.keys())

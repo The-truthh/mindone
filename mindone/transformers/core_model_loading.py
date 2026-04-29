@@ -33,6 +33,8 @@ from typing import Any
 import mindspore as ms
 from mindspore import nn
 
+from .utils.loading_report import LoadStateDictInfo
+
 logger = logging.getLogger(__name__)
 
 
@@ -197,7 +199,7 @@ def convert_and_load_state_dict_in_model(
     start_prefix: str = "",
     is_sharded: bool = False,
     **kwargs,
-) -> tuple[set[str], set[str], list[tuple[str, tuple]], dict | None, set[str]]:
+) -> tuple[LoadStateDictInfo, dict | None]:
     """
     Load state_dict into model with optional weight mapping.
 
@@ -220,13 +222,10 @@ def convert_and_load_state_dict_in_model(
 
     Returns:
         Tuple of:
-        - missing_keys: Set of keys expected by model but not in state_dict
-        - unexpected_keys: Set of keys in state_dict but not expected by model
-        - mismatched_keys: List of (key, checkpoint_shape, model_shape) tuples
+        - loading_info: Structured loading diagnostics
         - disk_offload_index: Always None for MindONE minimal version
-        - conversion_errors: Set of error messages during conversion
     """
-    conversion_errors = set()
+    conversion_errors = {}
     disk_offload_index = None  # Not supported in MindONE minimal version
 
     # Step 1: Apply weight mapping if provided
@@ -235,7 +234,7 @@ def convert_and_load_state_dict_in_model(
             state_dict = _apply_weight_mapping(state_dict, weight_mapping)
         except Exception as e:
             logger.error(f"Error applying weight mapping: {e}")
-            conversion_errors.add(f"weight_mapping_error: {str(e)}")
+            conversion_errors["weight_mapping"] = f"weight_mapping_error: {str(e)}"
 
     # Step 2: Get expected keys from model
     expected_keys = set(model.state_dict().keys())
@@ -263,7 +262,7 @@ def convert_and_load_state_dict_in_model(
         _mindone_load(model, state_dict, start_prefix, is_sharded)
     except Exception as e:
         logger.error(f"Error loading state dict: {e}")
-        conversion_errors.add(f"load_error: {str(e)}")
+        conversion_errors["load_state_dict"] = f"load_error: {str(e)}"
         raise
 
     # Step 5: Calculate missing and unexpected keys
@@ -283,21 +282,14 @@ def convert_and_load_state_dict_in_model(
         missing_keys = set(missing_keys)
         unexpected_keys = set(unexpected_keys)
 
-    # Log results
-    if missing_keys and not is_sharded:
-        logger.warning(f"Missing keys: {sorted(missing_keys)}")
-    if unexpected_keys and not is_sharded:
-        logger.warning(f"Unexpected keys: {sorted(unexpected_keys)}")
-    if mismatched_keys:
-        logger.warning(f"Mismatched keys: {len(mismatched_keys)}")
-
-    return (
-        missing_keys,
-        unexpected_keys,
-        mismatched_keys,
-        disk_offload_index,
-        conversion_errors,
+    loading_info = LoadStateDictInfo(
+        missing_keys=missing_keys,
+        unexpected_keys=unexpected_keys,
+        mismatched_keys={tuple(item) for item in mismatched_keys},
+        error_msgs=[],
+        conversion_errors=conversion_errors,
     )
+    return loading_info, disk_offload_index
 
 
 def revert_weight_conversion(
