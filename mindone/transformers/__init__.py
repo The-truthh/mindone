@@ -1164,6 +1164,12 @@ from .models.owlvit import (
     OwlViTVisionModel,
 )
 from .models.paligemma import PaliGemmaForConditionalGeneration, PaliGemmaPreTrainedModel
+from .models.pangu_ultra_moe import (
+    PanguUltraMoEConfig,
+    PanguUltraMoEForCausalLM,
+    PanguUltraMoEModel,
+    PanguUltraMoEPreTrainedModel,
+)
 from .models.parakeet import ParakeetEncoder, ParakeetForCTC, ParakeetPreTrainedModel
 from .models.pegasus import PegasusForCausalLM, PegasusForConditionalGeneration, PegasusModel, PegasusPreTrainedModel
 from .models.pegasus_x import PegasusXForConditionalGeneration, PegasusXModel, PegasusXPreTrainedModel

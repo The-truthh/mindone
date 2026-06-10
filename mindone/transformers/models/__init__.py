@@ -206,6 +206,7 @@ from . import (
     owlv2,
     owlvit,
     paligemma,
+    pangu_ultra_moe,
     parakeet,
     pegasus,
     pegasus_x,

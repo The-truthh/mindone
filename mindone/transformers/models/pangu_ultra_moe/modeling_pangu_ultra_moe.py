@@ -1,0 +1,473 @@
+# coding=utf-8
+# Copyright (c) 2025 Huawei Technologies Co., Ltd. All rights reserved.
+# Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
+#
+# This code is adapted from https://github.com/huggingface/transformers
+# with modifications to run transformers on mindspore.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from typing import List, Optional, Tuple, Union
+
+import mindspore as ms
+from mindspore import mint, nn
+from mindspore.common.initializer import Constant, Normal, initializer
+
+from ...activations import ACT2FN
+from ...cache_utils import Cache, DynamicCache
+from ...modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from ...modeling_utils import PreTrainedModel
+from .configuration_pangu_ultra_moe import PanguUltraMoEConfig
+
+
+def _normal_(tensor, mean=0.0, std=1.0):
+    tensor.set_data(initializer(Normal(std, mean), tensor.shape, tensor.dtype))
+
+
+def _zero_(tensor):
+    tensor.set_data(initializer(Constant(0.0), tensor.shape, tensor.dtype))
+
+
+class PanguUltraMoERMSNorm(nn.Cell):
+    def __init__(self, hidden_dim, epsilon=1e-5):
+        super().__init__()
+        self.weight = ms.Parameter(mint.ones(hidden_dim))
+        self.epsilon = epsilon
+
+    def construct(self, input_x):
+        origin_dtype = input_x.dtype
+        variance = input_x.to(ms.float32).pow(2).mean(-1, keepdim=True)
+        input_x = input_x * mint.rsqrt(variance + self.epsilon)
+        return (self.weight * input_x).to(origin_dtype)
+
+
+class PanguUltraMoERotaryEmbedding(nn.Cell):
+    def __init__(self, dim, max_position_embeddings=131072, base=25600000.0):
+        super().__init__()
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        inv_freq = 1.0 / (self.base ** (mint.arange(0, dim, 2, dtype=ms.float32) / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def construct(self, x, seq_len=None):
+        if seq_len is None:
+            seq_len = x.shape[-2]
+        t = mint.arange(seq_len, dtype=ms.float32)
+        freqs = mint.outer(t, self.inv_freq)
+        emb = mint.cat((freqs, freqs), dim=-1)
+        return emb.cos().to(x.dtype), emb.sin().to(x.dtype)
+
+
+def rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return mint.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+
+    b, h, s, d = q.shape
+    q = q.view((b, h, s, d // 2, 2)).transpose(4, 3).reshape((b, h, s, d))
+
+    b, h, s, d = k.shape
+    k = k.view((b, h, s, d // 2, 2)).transpose(4, 3).reshape((b, h, s, d))
+
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
+class PanguUltraMoEMLP(nn.Cell):
+    def __init__(self, config, hidden_size=None, intermediate_size=None):
+        super().__init__()
+        self.hidden_size = config.hidden_size if hidden_size is None else hidden_size
+        self.intermediate_size = config.intermediate_size if intermediate_size is None else intermediate_size
+        self.gate_proj = mint.nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = mint.nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = mint.nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def construct(self, x):
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+
+class PanguUltraMoEGate(nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.top_k = config.num_experts_per_tok
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.norm_topk_prob = config.norm_topk_prob
+        self.weight = ms.Parameter(mint.empty((config.num_routed_experts, config.hidden_size)))
+
+    def construct(self, hidden_states):
+        bsz, seq_len, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view((-1, hidden_dim))
+        logits = mint.nn.functional.linear(hidden_states.to(ms.float32), self.weight.to(ms.float32), None)
+        scores = logits.sigmoid()
+        topk_weight, topk_idx = mint.topk(scores.view((bsz * seq_len, -1)), k=self.top_k, dim=-1, sorted=False)
+
+        if self.top_k > 1 and self.norm_topk_prob:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+        topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_idx, topk_weight
+
+
+class PanguUltraMoEBlock(nn.Cell):
+    def __init__(self, config):
+        super().__init__()
+        self.num_shared_experts = config.num_shared_experts
+        self.num_routed_experts = config.num_routed_experts
+        self.experts = nn.CellList(
+            [PanguUltraMoEMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(self.num_routed_experts)]
+        )
+        self.gate = PanguUltraMoEGate(config)
+        if self.num_shared_experts is not None:
+            intermediate_size = config.moe_intermediate_size * self.num_shared_experts
+            self.shared_experts = PanguUltraMoEMLP(config=config, intermediate_size=intermediate_size)
+
+    def construct(self, hidden_states):
+        shared_output = self.shared_experts(hidden_states) if self.num_shared_experts is not None else None
+        input_shape = hidden_states.shape
+        topk_ids, topk_weight = self.gate(hidden_states)
+        hidden_states = hidden_states.view((-1, hidden_states.shape[-1]))
+
+        gates = mint.zeros((topk_ids.shape[0], self.num_routed_experts), dtype=hidden_states.dtype)
+        gates = gates.scatter(1, topk_ids, 1)
+        tokens_per_expert = gates.sum(dim=0).to(ms.int64).asnumpy()
+        idxs = topk_ids.view(-1).argsort()
+        sorted_tokens = hidden_states[idxs // topk_ids.shape[1]]
+
+        output_hidden_states = []
+        start_idx = 0
+        for expert_idx, num_tokens in enumerate(tokens_per_expert):
+            end_idx = start_idx + int(num_tokens)
+            if num_tokens > 0:
+                output_hidden_states.append(self.experts[expert_idx](sorted_tokens[start_idx:end_idx]))
+            start_idx = end_idx
+
+        if output_hidden_states:
+            cat_hidden_states = mint.cat(output_hidden_states, dim=0)
+        else:
+            cat_hidden_states = mint.zeros((0, hidden_states.shape[-1]), dtype=hidden_states.dtype)
+
+        final_hidden_states = mint.zeros_like(cat_hidden_states).scatter(0, idxs.unsqueeze(-1).expand(cat_hidden_states.shape), cat_hidden_states)
+        final_out = final_hidden_states.view((*topk_ids.shape, -1)).to(topk_weight.dtype)
+        final_out = (final_out * topk_weight.unsqueeze(dim=-1)).sum(dim=1).to(hidden_states.dtype).view(input_shape)
+        if shared_output is not None:
+            final_out = final_out + shared_output
+        return final_out
+
+
+class PanguUltraMoEAttention(nn.Cell):
+    def __init__(self, config: PanguUltraMoEConfig, layer_idx: Optional[int] = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        self.attention_dropout = config.attention_dropout
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.attention_q_lora_dim = config.attention_q_lora_dim
+        self.attention_qk_rope_dim = config.attention_qk_rope_dim
+        self.attention_kv_lora_dim = config.attention_kv_lora_dim
+        self.attention_v_dim = config.attention_v_dim
+        self.attention_qk_dim = config.attention_qk_dim
+        self.q_head_dim = config.attention_qk_dim + config.attention_qk_rope_dim
+
+        if self.attention_q_lora_dim is None:
+            self.q_proj = mint.nn.Linear(self.hidden_size, self.num_heads * self.q_head_dim, bias=False)
+        else:
+            self.q_a_proj = mint.nn.Linear(self.hidden_size, config.attention_q_lora_dim, bias=False)
+            self.q_a_layernorm = PanguUltraMoERMSNorm(config.attention_q_lora_dim)
+            self.q_b_proj = mint.nn.Linear(config.attention_q_lora_dim, self.num_heads * self.q_head_dim, bias=False)
+        self.kv_a_proj_with_mqa = mint.nn.Linear(
+            self.hidden_size, config.attention_kv_lora_dim + config.attention_qk_rope_dim, bias=False
+        )
+        self.kv_a_layernorm = PanguUltraMoERMSNorm(config.attention_kv_lora_dim)
+        self.kv_b_proj = mint.nn.Linear(
+            config.attention_kv_lora_dim,
+            self.num_heads * (config.attention_qk_dim + self.attention_v_dim),
+            bias=False,
+        )
+        self.o_proj = mint.nn.Linear(self.num_heads * self.attention_v_dim, self.hidden_size, bias=False)
+        self.rotary_emb = PanguUltraMoERotaryEmbedding(
+            self.attention_qk_rope_dim,
+            max_position_embeddings=config.max_position_embeddings,
+            base=config.rope_theta,
+        )
+        self.softmax_scale = self.q_head_dim**-0.5
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> Tuple[ms.Tensor, Optional[ms.Tensor]]:
+        bsz, q_len, _ = hidden_states.shape
+
+        if self.attention_q_lora_dim is None:
+            q = self.q_proj(hidden_states)
+        else:
+            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+        q = q.view((bsz, q_len, self.num_heads, self.q_head_dim)).transpose(1, 2)
+        q_nope, q_pe = mint.split(q, [self.attention_qk_dim, self.attention_qk_rope_dim], dim=-1)
+
+        latent_kv = self.kv_a_proj_with_mqa(hidden_states)
+        kv_a, k_pe = mint.split(latent_kv, [self.attention_kv_lora_dim, self.attention_qk_rope_dim], dim=-1)
+        k_pe = k_pe.view((bsz, q_len, 1, self.attention_qk_rope_dim)).transpose(1, 2)
+        kv = self.kv_b_proj(self.kv_a_layernorm(kv_a))
+        kv = kv.view((bsz, q_len, self.num_heads, self.attention_qk_dim + self.attention_v_dim)).transpose(1, 2)
+
+        kv_seq_len = kv.shape[-2]
+        if past_key_value is not None:
+            kv_seq_len += past_key_value.get_seq_length(self.layer_idx)
+        cos, sin = self.rotary_emb(kv, kv_seq_len)
+        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
+
+        k_nope, value = mint.split(kv, [self.attention_qk_dim, self.attention_v_dim], dim=-1)
+        query = mint.cat((q_nope, q_pe), dim=-1)
+        key = mint.cat((k_nope, k_pe), dim=-1)
+
+        if past_key_value is not None:
+            key, value = past_key_value.update(key, value, self.layer_idx, {"sin": sin, "cos": cos})
+
+        attn_weights = mint.matmul(query, key.transpose(2, 3)) * self.softmax_scale
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights = mint.nn.functional.softmax(attn_weights, dim=-1, dtype=ms.float32).to(query.dtype)
+        attn_weights = mint.nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_output = mint.matmul(attn_weights, value)
+        attn_output = attn_output.transpose(1, 2).contiguous().view((bsz, q_len, -1))
+        attn_output = self.o_proj(attn_output)
+        return attn_output, past_key_value
+
+
+class PanguUltraMoEDecoderLayer(nn.Cell):
+    def __init__(self, config: PanguUltraMoEConfig, layer_idx: int):
+        super().__init__()
+        self.self_attn = PanguUltraMoEAttention(config=config, layer_idx=layer_idx)
+        self.mlp = (
+            PanguUltraMoEBlock(config)
+            if config.num_routed_experts is not None and layer_idx >= config.num_dense_layers
+            else PanguUltraMoEMLP(config)
+        )
+        self.input_layernorm = PanguUltraMoERMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
+        self.post_attention_layernorm = PanguUltraMoERMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
+        self.sandwich_norm = getattr(config, "sandwich_norm", False)
+        if self.sandwich_norm:
+            self.pre_mlp_layernorm = PanguUltraMoERMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
+            self.post_mlp_layernorm = PanguUltraMoERMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_value: Optional[Cache] = None,
+        use_cache: Optional[bool] = False,
+        **kwargs,
+    ) -> Tuple[ms.Tensor, Optional[Cache]]:
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states, present_key_value = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            use_cache=use_cache,
+            **kwargs,
+        )
+        if self.sandwich_norm:
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+            hidden_states = self.pre_mlp_layernorm(hidden_states)
+        else:
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+
+        hidden_states = self.mlp(hidden_states)
+        if self.sandwich_norm:
+            hidden_states = self.post_mlp_layernorm(hidden_states)
+        hidden_states = residual + hidden_states
+        return hidden_states, present_key_value
+
+
+class PanguUltraMoEPreTrainedModel(PreTrainedModel):
+    config_class = PanguUltraMoEConfig
+    base_model_prefix = "model"
+    supports_gradient_checkpointing = True
+    _no_split_modules = ["PanguUltraMoEDecoderLayer"]
+    _skip_keys_device_placement = "past_key_values"
+    _supports_cache_class = True
+
+    def _init_weights(self, module):
+        std = self.config.initializer_range
+        if isinstance(module, mint.nn.Linear):
+            _normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                _zero_(module.bias)
+        elif isinstance(module, mint.nn.Embedding):
+            _normal_(module.weight, mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight[module.padding_idx] = 0
+        elif isinstance(module, PanguUltraMoERMSNorm):
+            module.weight.set_data(initializer(Constant(1.0), module.weight.shape, module.weight.dtype))
+
+
+class PanguUltraMoEModel(PanguUltraMoEPreTrainedModel):
+    def __init__(self, config: PanguUltraMoEConfig):
+        super().__init__(config)
+        self.vocab_size = config.vocab_size
+        self.padding_idx = config.pad_token_id
+        self.embed_tokens = mint.nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = nn.CellList([PanguUltraMoEDecoderLayer(config, idx) for idx in range(config.num_hidden_layers)])
+        self.norm = PanguUltraMoERMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
+        self.gradient_checkpointing = False
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.embed_tokens = value
+
+    def construct(
+        self,
+        input_ids: Optional[ms.Tensor] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_values: Optional[Union[Cache, List[ms.Tensor]]] = None,
+        inputs_embeds: Optional[ms.Tensor] = None,
+        use_cache: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You have to specify input_ids or inputs_embeds.")
+
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        if input_ids is not None:
+            hidden_states = self.embed_tokens(input_ids)
+            batch_size, seq_length = input_ids.shape
+        else:
+            hidden_states = inputs_embeds
+            batch_size, seq_length = inputs_embeds.shape[:2]
+
+        if position_ids is None:
+            position_ids = mint.arange(seq_length, dtype=ms.int64).unsqueeze(0)
+
+        past_key_values_length = 0
+        if use_cache:
+            use_legacy_cache = not isinstance(past_key_values, Cache)
+            if use_legacy_cache:
+                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+            position_ids = position_ids + past_key_values_length
+        else:
+            use_legacy_cache = False
+
+        attention_mask = _prepare_4d_causal_attention_mask(
+            attention_mask,
+            (batch_size, seq_length),
+            hidden_states,
+            past_key_values_length,
+        )
+
+        present_key_value = past_key_values
+        for decoder_layer in self.layers:
+            hidden_states, present_key_value = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_values,
+                use_cache=use_cache,
+            )
+
+        hidden_states = self.norm(hidden_states)
+        if use_cache and use_legacy_cache:
+            present_key_value = present_key_value.to_legacy_cache()
+
+        return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=present_key_value)
+
+
+class PanguUltraMoEForCausalLM(PanguUltraMoEPreTrainedModel):
+    _tied_weights_keys = ["lm_head.weight"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = PanguUltraMoEModel(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = mint.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.model.embed_tokens = value
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head = new_embeddings
+
+    def set_decoder(self, decoder):
+        self.model = decoder
+
+    def get_decoder(self):
+        return self.model
+
+    def construct(
+        self,
+        input_ids: Optional[ms.Tensor] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_values: Optional[Union[Cache, List[ms.Tensor]]] = None,
+        inputs_embeds: Optional[ms.Tensor] = None,
+        labels: Optional[ms.Tensor] = None,
+        use_cache: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+        )
+        logits = self.lm_head(outputs[0]).float()
+
+        loss = None
+        if labels is not None:
+            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.vocab_size)
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
+__all__ = ["PanguUltraMoEForCausalLM", "PanguUltraMoEModel", "PanguUltraMoEPreTrainedModel"]
