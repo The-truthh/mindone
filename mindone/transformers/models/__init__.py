@@ -93,6 +93,7 @@ from . import (
     esm,
     evolla,
     exaone4,
+    exaone_moe,
     falcon,
     falcon_h1,
     falcon_mamba,

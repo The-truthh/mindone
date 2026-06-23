@@ -561,6 +561,7 @@ from .models.exaone4 import (
     Exaone4Model,
     Exaone4PreTrainedModel,
 )
+from .models.exaone_moe import ExaoneMoeForCausalLM, ExaoneMoeModel, ExaoneMoePreTrainedModel
 from .models.falcon import (
     FalconForCausalLM,
     FalconForQuestionAnswering,
